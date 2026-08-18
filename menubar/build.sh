@@ -20,6 +20,8 @@ command -v swiftc >/dev/null || { echo "swiftc not found. Install the Xcode Comm
 # production app is not involved; bridge.mjs resolves this helper from bin/.
 MAC_DEV_BRIDGE_UI_HELPER_OUTPUT="$PACKAGE_DIR/bin/MacUIHelper" "$PACKAGE_DIR/scripts/build-mac-ui-helper.sh" >/dev/null
 echo "  built native desktop-control helper"
+MAC_DEV_BRIDGE_UI_CURSOR_OUTPUT="$PACKAGE_DIR/bin/MacUICursorOverlay" "$PACKAGE_DIR/scripts/build-mac-ui-cursor.sh" >/dev/null
+echo "  built virtual AI cursor overlay"
 
 echo "Building $NAME..."
 
@@ -46,8 +48,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>$NAME</string>
   <key>CFBundleDisplayName</key><string>Mac Developer Bridge</string>
   <key>CFBundleIdentifier</key><string>local.mac-developer-bridge.menubar</string>
-  <key>CFBundleVersion</key><string>0.4.0</string>
-  <key>CFBundleShortVersionString</key><string>0.4.0</string>
+  <key>CFBundleVersion</key><string>0.5.0</string>
+  <key>CFBundleShortVersionString</key><string>0.5.0</string>
   <key>CFBundleExecutable</key><string>$NAME</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>

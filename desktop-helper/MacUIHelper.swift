@@ -91,11 +91,62 @@ func requireAccessibility() throws {
     }
 }
 
+func requirePostEvents() throws {
+    guard CGPreflightPostEventAccess() else {
+        throw HelperFailure(
+            code: "UI_POST_EVENTS_PERMISSION_REQUIRED",
+            message: "Permission to post input events is required for mouse/keyboard desktop control"
+        )
+    }
+}
+
+func applicationElement(_ pid: pid_t) -> AXUIElement {
+    let root = AXUIElementCreateApplication(pid)
+    // Electron/Chromium and several complex AppKit applications expose a richer AX
+    // hierarchy when Enhanced User Interface is enabled. This is a best-effort
+    // accessibility hint only: unsupported/read-only targets continue unchanged.
+    let enhancedKey = "AXEnhancedUserInterface" as CFString
+    if axBool(root, enhancedKey) != true {
+        _ = AXUIElementSetAttributeValue(root, enhancedKey, kCFBooleanTrue)
+    }
+    return root
+}
+
 func axCopy(_ element: AXUIElement, _ attribute: CFString) -> CFTypeRef? {
     var value: CFTypeRef?
     let result = AXUIElementCopyAttributeValue(element, attribute, &value)
     guard result == .success else { return nil }
     return value
+}
+
+func axCopyMany(_ element: AXUIElement, _ attributes: [CFString]) -> [String: CFTypeRef] {
+    guard !attributes.isEmpty else { return [:] }
+    var values: CFArray?
+    let result = AXUIElementCopyMultipleAttributeValues(
+        element,
+        attributes as CFArray,
+        AXCopyMultipleAttributeOptions(rawValue: 0),
+        &values
+    )
+    if result == .success, let rawValues = values as? [Any], rawValues.count == attributes.count {
+        var output: [String: CFTypeRef] = [:]
+        for (attribute, raw) in zip(attributes, rawValues) {
+            // The batch API represents per-attribute AX errors as AXValue wrappers.
+            // Keep only actual attribute values; callers already treat missing values
+            // as optional and therefore retain the same semantics as axCopy().
+            if CFGetTypeID(raw as CFTypeRef) == AXValueGetTypeID(),
+               AXValueGetType(raw as! AXValue) == .axError {
+                continue
+            }
+            output[attribute as String] = raw as CFTypeRef
+        }
+        return output
+    }
+    var fallback: [String: CFTypeRef] = [:]
+    for attribute in attributes {
+        if let value = axCopy(element, attribute) { fallback[attribute as String] = value }
+    }
+    return fallback
 }
 
 func axString(_ element: AXUIElement, _ attribute: CFString) -> String? {
@@ -150,14 +201,35 @@ func fnv1a64(_ text: String) -> String {
     return String(format: "%016llx", hash)
 }
 
-func elementFingerprint(_ element: AXUIElement) -> String {
-    let role = axString(element, kAXRoleAttribute as CFString) ?? ""
-    let subrole = axString(element, kAXSubroleAttribute as CFString) ?? ""
-    let identifier = axString(element, kAXIdentifierAttribute as CFString) ?? ""
-    let title = axString(element, kAXTitleAttribute as CFString) ?? ""
-    let description = axString(element, kAXDescriptionAttribute as CFString) ?? ""
-    let position = axPoint(element, kAXPositionAttribute as CFString)
-    let size = axSize(element, kAXSizeAttribute as CFString)
+func axPointValue(_ raw: CFTypeRef?) -> CGPoint? {
+    guard let raw, CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+    var point = CGPoint.zero
+    guard AXValueGetType(raw as! AXValue) == .cgPoint, AXValueGetValue(raw as! AXValue, .cgPoint, &point) else { return nil }
+    return point
+}
+
+func axSizeValue(_ raw: CFTypeRef?) -> CGSize? {
+    guard let raw, CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+    var size = CGSize.zero
+    guard AXValueGetType(raw as! AXValue) == .cgSize, AXValueGetValue(raw as! AXValue, .cgSize, &size) else { return nil }
+    return size
+}
+
+func elementFingerprint(_ element: AXUIElement, values supplied: [String: CFTypeRef]? = nil) -> String {
+    let attributes: [CFString] = [
+        kAXRoleAttribute as CFString, kAXSubroleAttribute as CFString, kAXIdentifierAttribute as CFString,
+        kAXTitleAttribute as CFString, kAXDescriptionAttribute as CFString,
+        kAXPositionAttribute as CFString, kAXSizeAttribute as CFString,
+    ]
+    let values = supplied ?? axCopyMany(element, attributes)
+    func string(_ attribute: CFString) -> String { (values[attribute as String] as? String) ?? "" }
+    let role = string(kAXRoleAttribute as CFString)
+    let subrole = string(kAXSubroleAttribute as CFString)
+    let identifier = string(kAXIdentifierAttribute as CFString)
+    let title = string(kAXTitleAttribute as CFString)
+    let description = string(kAXDescriptionAttribute as CFString)
+    let position = axPointValue(values[kAXPositionAttribute as String])
+    let size = axSizeValue(values[kAXSizeAttribute as String])
     let frame = [
         position.map { String(format: "%.1f,%.1f", $0.x, $0.y) } ?? "",
         size.map { String(format: "%.1f,%.1f", $0.width, $0.height) } ?? "",
@@ -166,7 +238,7 @@ func elementFingerprint(_ element: AXUIElement) -> String {
 }
 
 func findElementsByFingerprint(pid: pid_t, expectedFingerprint: String, maxDepth: Int = 20, maxElements: Int = 5_000, maxMatches: Int = 2) -> [AXUIElement] {
-    let root = AXUIElementCreateApplication(pid)
+    let root = applicationElement(pid)
     var visited = 0
     var matches: [AXUIElement] = []
 
@@ -189,7 +261,7 @@ func findElementsByFingerprint(pid: pid_t, expectedFingerprint: String, maxDepth
 }
 
 func elementAtPath(pid: pid_t, path: [Int], expectedFingerprint: String) throws -> AXUIElement {
-    var current = AXUIElementCreateApplication(pid)
+    var current = applicationElement(pid)
     var pathValid = true
     for index in path {
         let children = axChildren(current)
@@ -237,36 +309,45 @@ func parseRef(_ ref: String) throws -> (pid_t, [Int], String) {
     return (pid, path, fingerprint)
 }
 
-func elementRef(_ element: AXUIElement, pid: pid_t, path: [Int]) -> String {
+func elementRef(_ element: AXUIElement, pid: pid_t, path: [Int], fingerprint: String? = nil) -> String {
     let pathText = path.isEmpty ? "root" : path.map(String.init).joined(separator: ".")
-    return "ax:\(pid):\(pathText):\(elementFingerprint(element))"
+    return "ax:\(pid):\(pathText):\(fingerprint ?? elementFingerprint(element))"
 }
 
 func describeAXElement(_ element: AXUIElement, pid: pid_t, path: [Int], includeValue: Bool) -> [String: Any] {
-    let role = axString(element, kAXRoleAttribute as CFString) ?? ""
-    let subrole = axString(element, kAXSubroleAttribute as CFString) ?? ""
+    var attributes: [CFString] = [
+        kAXRoleAttribute as CFString, kAXSubroleAttribute as CFString, kAXIdentifierAttribute as CFString,
+        kAXTitleAttribute as CFString, kAXDescriptionAttribute as CFString,
+        kAXEnabledAttribute as CFString, kAXFocusedAttribute as CFString,
+        kAXPositionAttribute as CFString, kAXSizeAttribute as CFString,
+    ]
+    if includeValue { attributes.append(kAXValueAttribute as CFString) }
+    let values = axCopyMany(element, attributes)
+    func string(_ attribute: CFString) -> String { (values[attribute as String] as? String) ?? "" }
+    func bool(_ attribute: CFString) -> Bool? { (values[attribute as String] as? NSNumber)?.boolValue }
+    let role = string(kAXRoleAttribute as CFString)
+    let subrole = string(kAXSubroleAttribute as CFString)
     let secure = role.localizedCaseInsensitiveContains("secure") || subrole.localizedCaseInsensitiveContains("secure")
-    let position = axPoint(element, kAXPositionAttribute as CFString)
-    let size = axSize(element, kAXSizeAttribute as CFString)
+    let position = axPointValue(values[kAXPositionAttribute as String])
+    let size = axSizeValue(values[kAXSizeAttribute as String])
+    let fingerprint = elementFingerprint(element, values: values)
     var result: [String: Any] = [
-        "ref": elementRef(element, pid: pid, path: path),
+        "ref": elementRef(element, pid: pid, path: path, fingerprint: fingerprint),
         "role": role,
         "subrole": subrole,
-        "title": axString(element, kAXTitleAttribute as CFString) ?? "",
-        "description": axString(element, kAXDescriptionAttribute as CFString) ?? "",
-        "identifier": axString(element, kAXIdentifierAttribute as CFString) ?? "",
+        "title": string(kAXTitleAttribute as CFString),
+        "description": string(kAXDescriptionAttribute as CFString),
+        "identifier": string(kAXIdentifierAttribute as CFString),
         "actions": axActions(element),
     ]
-    if let enabled = axBool(element, kAXEnabledAttribute as CFString) { result["enabled"] = enabled }
-    if let focused = axBool(element, kAXFocusedAttribute as CFString) { result["focused"] = focused }
-    if let position, let size {
-        result["frame"] = rectDictionary(CGRect(origin: position, size: size))
-    }
+    if let enabled = bool(kAXEnabledAttribute as CFString) { result["enabled"] = enabled }
+    if let focused = bool(kAXFocusedAttribute as CFString) { result["focused"] = focused }
+    if let position, let size { result["frame"] = rectDictionary(CGRect(origin: position, size: size)) }
     if includeValue {
         if secure {
             result["value"] = "<redacted>"
             result["secure"] = true
-        } else if let value = boundedString(axCopy(element, kAXValueAttribute as CFString)) {
+        } else if let value = boundedString(values[kAXValueAttribute as String]) {
             result["value"] = value
         }
     }
@@ -275,7 +356,7 @@ func describeAXElement(_ element: AXUIElement, pid: pid_t, path: [Int], includeV
 
 func axTree(pid: pid_t, maxDepth: Int, maxElements: Int, includeValues: Bool) throws -> [String: Any] {
     try requireAccessibility()
-    let root = AXUIElementCreateApplication(pid)
+    let root = applicationElement(pid)
     var emitted = 0
     var truncated = false
 
@@ -429,10 +510,29 @@ func launchApplication(_ input: [String: Any]) async throws -> NSRunningApplicat
     return try await workspace.openApplication(at: url, configuration: configuration)
 }
 
-func activateApplication(_ app: NSRunningApplication) throws {
-    guard app.activate(options: [.activateIgnoringOtherApps]) else {
-        throw HelperFailure(code: "UI_APP_ACTIVATE_FAILED", message: "macOS refused to activate \(app.localizedName ?? String(app.processIdentifier))")
+func ensureApplicationFrontmost(_ pid: pid_t, timeoutMs: Int = 700) throws {
+    if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { return }
+    guard let app = NSRunningApplication(processIdentifier: pid) else {
+        throw HelperFailure(code: "UI_APP_NOT_FOUND", message: "No running application for pid \(pid)")
     }
+    _ = app.activate(options: [.activateIgnoringOtherApps])
+    // NSRunningApplication.activate() can report success before WindowServer has
+    // actually transferred focus (and on recent macOS can remain non-frontmost).
+    // Accessibility exposes AXFrontmost as the authoritative generic foreground
+    // control for normal applications, so use it when trusted and then verify.
+    if AXIsProcessTrusted() {
+        _ = AXUIElementSetAttributeValue(applicationElement(pid), kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+    }
+    let deadline = Date().addingTimeInterval(Double(max(50, timeoutMs)) / 1000.0)
+    repeat {
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { return }
+        CFRunLoopRunInMode(.defaultMode, 0.03, false)
+    } while Date() < deadline
+    throw HelperFailure(code: "UI_APP_ACTIVATE_FAILED", message: "Application pid \(pid) did not become frontmost after activation")
+}
+
+func activateApplication(_ app: NSRunningApplication) throws {
+    try ensureApplicationFrontmost(app.processIdentifier)
 }
 
 func performAXAction(_ input: [String: Any]) throws -> [String: Any] {
@@ -477,15 +577,69 @@ func performAXAction(_ input: [String: Any]) throws -> [String: Any] {
     return ["ref": ref, "action": action, "performed": true]
 }
 
+func inputMode(_ input: [String: Any]) throws -> String {
+    let requested = try stringValue(input, "input_mode", default: "auto").lowercased()
+    guard ["auto", "background", "foreground"].contains(requested) else {
+        throw HelperFailure(code: "UI_INVALID_INPUT", message: "input_mode must be auto, background, or foreground")
+    }
+    if requested == "auto" { return input["pid"] is NSNumber ? "background" : "foreground" }
+    return requested
+}
+
+func inputTargetPid(_ input: [String: Any], mode: String) throws -> pid_t? {
+    if let raw = input["pid"] as? NSNumber { return pid_t(raw.int32Value) }
+    if mode == "background" {
+        throw HelperFailure(code: "UI_INPUT_TARGET_REQUIRED", message: "background input requires a target pid")
+    }
+    return nil
+}
+
+func maybeActivateInputTarget(_ input: [String: Any], pid: pid_t?, mode: String) throws {
+    guard mode == "foreground", boolValue(input, "activate_target", default: false), let pid else { return }
+    try ensureApplicationFrontmost(pid)
+    Thread.sleep(forTimeInterval: 0.04)
+}
+
+func jsonPid(_ pid: pid_t?) -> Any {
+    if let pid { return Int(pid) }
+    return NSNull()
+}
+
+func postInputEvent(_ event: CGEvent, pid: pid_t?, mode: String) throws {
+    if mode == "background" {
+        guard let pid else { throw HelperFailure(code: "UI_INPUT_TARGET_REQUIRED", message: "background input requires pid") }
+        event.postToPid(pid)
+    } else {
+        event.post(tap: .cghidEventTap)
+    }
+}
+
+func guardInputFocus(_ before: pid_t?, target: pid_t?, mode: String, preserveFocus: Bool, operation: String) throws {
+    guard mode == "background", preserveFocus, let target, let before, before != target else { return }
+    let after = NSWorkspace.shared.frontmostApplication?.processIdentifier
+    if after == target {
+        throw HelperFailure(code: "UI_FOCUS_CHANGED", message: "Target pid \(target) became frontmost during background \(operation)")
+    }
+}
+
 func postMouse(_ input: [String: Any]) throws -> [String: Any] {
     try requireAccessibility()
+    try requirePostEvents()
     let action = try stringValue(input, "action").lowercased()
+    let mode = try inputMode(input)
+    let pid = try inputTargetPid(input, mode: mode)
+    let preserveFocus = boolValue(input, "preserve_focus", default: true)
+    let before = NSWorkspace.shared.frontmostApplication?.processIdentifier
+    try maybeActivateInputTarget(input, pid: pid, mode: mode)
     let point = (action == "scroll")
         ? CGPoint(x: try doubleValue(input, "x", default: 0), y: try doubleValue(input, "y", default: 0))
         : try globalPoint(input)
     switch action {
     case "move":
-        CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?.post(tap: .cghidEventTap)
+        guard let event = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else {
+            throw HelperFailure(code: "UI_INPUT_EVENT_FAILED", message: "Could not create mouse move event")
+        }
+        try postInputEvent(event, pid: pid, mode: mode)
     case "click", "double_click", "right_click":
         let right = action == "right_click"
         let button: CGMouseButton = right ? .right : .left
@@ -499,35 +653,37 @@ func postMouse(_ input: [String: Any]) throws -> [String: Any] {
             }
             down.setIntegerValueField(.mouseEventClickState, value: click)
             up.setIntegerValueField(.mouseEventClickState, value: click)
-            down.post(tap: .cghidEventTap)
-            up.post(tap: .cghidEventTap)
+            try postInputEvent(down, pid: pid, mode: mode)
+            usleep(30_000)
+            try postInputEvent(up, pid: pid, mode: mode)
+            usleep(30_000)
+            try guardInputFocus(before, target: pid, mode: mode, preserveFocus: preserveFocus, operation: action)
         }
     case "drag":
-        let destination = CGPoint(
-            x: try doubleValue(input, "to_x"),
-            y: try doubleValue(input, "to_y")
-        )
+        let destination = CGPoint(x: try doubleValue(input, "to_x"), y: try doubleValue(input, "to_y"))
         let to: CGPoint
         if let display = input["to_display_id"] as? NSNumber {
             let bounds = try canonicalDisplayBounds(CGDirectDisplayID(display.uint32Value))
             to = CGPoint(x: destination.x + bounds.minX, y: destination.y + bounds.minY)
-        } else {
-            to = destination
-        }
+        } else { to = destination }
         let duration = max(0, min(10_000, try intValue(input, "duration_ms", default: 450)))
-        try performDrag(from: point, to: to, durationMs: duration)
-        return ["action": action, "from": ["x": point.x, "y": point.y], "to": ["x": to.x, "y": to.y], "durationMs": duration, "performed": true]
+        try performDrag(from: point, to: to, durationMs: duration, pid: pid, mode: mode)
+        try guardInputFocus(before, target: pid, mode: mode, preserveFocus: preserveFocus, operation: action)
+        return ["action": action, "inputMode": mode, "targetPid": jsonPid(pid), "from": ["x": point.x, "y": point.y], "to": ["x": to.x, "y": to.y], "durationMs": duration, "performed": true]
     case "scroll":
         let dx = Int32(try doubleValue(input, "delta_x", default: 0))
         let dy = Int32(try doubleValue(input, "delta_y", default: 0))
         guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: dy, wheel2: dx, wheel3: 0) else {
             throw HelperFailure(code: "UI_INPUT_EVENT_FAILED", message: "Could not create scroll event")
         }
-        event.post(tap: .cghidEventTap)
+        try postInputEvent(event, pid: pid, mode: mode)
+        try guardInputFocus(before, target: pid, mode: mode, preserveFocus: preserveFocus, operation: action)
     default:
         throw HelperFailure(code: "UI_INVALID_INPUT", message: "Unsupported mouse action '\(action)'")
     }
-    var result: [String: Any] = ["action": action, "performed": true]
+    try guardInputFocus(before, target: pid, mode: mode, preserveFocus: preserveFocus, operation: action)
+    var result: [String: Any] = ["action": action, "inputMode": mode, "performed": true]
+    result["targetPid"] = jsonPid(pid)
     if action != "scroll" { result["x"] = point.x; result["y"] = point.y }
     return result
 }
@@ -577,13 +733,72 @@ func eventFlags(_ names: [String]) -> CGEventFlags {
     return flags
 }
 
+func postForegroundShortcut(keyCode: CGKeyCode, modifiers: [(CGKeyCode, CGEventFlags)]) throws {
+    try requirePostEvents()
+    guard let source = CGEventSource(stateID: .privateState) else {
+        throw HelperFailure(code: "UI_INPUT_EVENT_FAILED", message: "Could not create private CoreGraphics event source")
+    }
+    var active: CGEventFlags = []
+    var pressed: [(CGKeyCode, CGEventFlags)] = []
+    do {
+        for (code, flag) in modifiers {
+            active.insert(flag)
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: true) else {
+                throw HelperFailure(code: "UI_INPUT_EVENT_FAILED", message: "Could not create shortcut modifier event")
+            }
+            event.type = .flagsChanged
+            event.flags = active
+            event.post(tap: .cghidEventTap)
+            pressed.append((code, flag))
+            usleep(12_000)
+        }
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else {
+            throw HelperFailure(code: "UI_INPUT_EVENT_FAILED", message: "Could not create shortcut key event")
+        }
+        down.flags = active
+        up.flags = active
+        down.post(tap: .cghidEventTap)
+        usleep(12_000)
+        up.post(tap: .cghidEventTap)
+        usleep(12_000)
+    } catch {
+        for (code, flag) in pressed.reversed() {
+            active.remove(flag)
+            if let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: false) {
+                event.type = .flagsChanged
+                event.flags = active
+                event.post(tap: .cghidEventTap)
+            }
+        }
+        usleep(30_000)
+        throw error
+    }
+    for (code, flag) in pressed.reversed() {
+        active.remove(flag)
+        if let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: false) {
+            event.type = .flagsChanged
+            event.flags = active
+            event.post(tap: .cghidEventTap)
+        }
+        usleep(12_000)
+    }
+    // Do not let this short-lived helper return before WindowServer consumes the
+    // complete chord; this is especially important for AppKit's Cmd-Shift-G
+    // responder shortcut in the XPC open/save panel service.
+    usleep(60_000)
+}
+
 func postKeyboard(_ input: [String: Any]) throws -> [String: Any] {
     try requireAccessibility()
+    try requirePostEvents()
+    let mode = try inputMode(input)
+    let pid = try inputTargetPid(input, mode: mode)
+    let preserveFocus = boolValue(input, "preserve_focus", default: true)
+    let before = NSWorkspace.shared.frontmostApplication?.processIdentifier
+    try maybeActivateInputTarget(input, pid: pid, mode: mode)
     if let text = input["text"] as? String {
         let units = Array(text.utf16)
-        // CGEvent's Unicode payload is not an appropriate place for an unbounded
-        // 500k-character string. Send bounded UTF-16 chunks and never split a
-        // surrogate pair across events.
         var offset = 0
         while offset < units.count {
             var end = min(units.count, offset + 1_024)
@@ -601,11 +816,18 @@ func postKeyboard(_ input: [String: Any]) throws -> [String: Any] {
                 down.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
                 up.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
             }
-            down.post(tap: .cghidEventTap)
-            up.post(tap: .cghidEventTap)
+            try postInputEvent(down, pid: pid, mode: mode)
+            try postInputEvent(up, pid: pid, mode: mode)
+            // Keep the short-lived helper alive long enough for WindowServer to
+            // consume each queued text event. A zero-delay process exit can make
+            // CGEvent posting report success while the keystroke never reaches the
+            // target on macOS 15.x.
+            usleep(10_000)
             offset = end
+            try guardInputFocus(before, target: pid, mode: mode, preserveFocus: preserveFocus, operation: "typing")
         }
-        return ["typedCharacters": text.count, "performed": true]
+        usleep(30_000)
+        return ["typedCharacters": text.count, "inputMode": mode, "targetPid": jsonPid(pid), "performed": true]
     }
     let key = input["key"] as? String
     let code: CGKeyCode
@@ -614,37 +836,31 @@ func postKeyboard(_ input: [String: Any]) throws -> [String: Any] {
             throw HelperFailure(code: "UI_INVALID_INPUT", message: "key_code must be between 0 and 255")
         }
         code = CGKeyCode(raw.uint16Value)
-    } else if let key, let mapped = keyCode(key) {
-        code = mapped
-    } else {
-        throw HelperFailure(code: "UI_INVALID_INPUT", message: "Supply a supported key name or key_code")
-    }
+    } else if let key, let mapped = keyCode(key) { code = mapped }
+    else { throw HelperFailure(code: "UI_INVALID_INPUT", message: "Supply a supported key name or key_code") }
     let modifiers = input["modifiers"] as? [String] ?? []
     let flags = eventFlags(modifiers)
     let phase = (input["phase"] as? String)?.lowercased() ?? "press"
-    guard ["press", "down", "up"].contains(phase) else {
-        throw HelperFailure(code: "UI_INVALID_INPUT", message: "phase must be press, down, or up")
-    }
+    guard ["press", "down", "up"].contains(phase) else { throw HelperFailure(code: "UI_INVALID_INPUT", message: "phase must be press, down, or up") }
     let repeats = max(1, min(100, (input["repeat"] as? NSNumber)?.intValue ?? 1))
     let delayMs = max(0, min(2_000, (input["delay_ms"] as? NSNumber)?.intValue ?? 0))
     for index in 0..<repeats {
         if phase != "up" {
-            guard let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true) else {
-                throw HelperFailure(code: "UI_INPUT_EVENT_FAILED", message: "Could not create key-down event")
-            }
+            guard let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true) else { throw HelperFailure(code: "UI_INPUT_EVENT_FAILED", message: "Could not create key-down event") }
             down.flags = flags
-            down.post(tap: .cghidEventTap)
+            try postInputEvent(down, pid: pid, mode: mode)
         }
         if phase != "down" {
-            guard let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) else {
-                throw HelperFailure(code: "UI_INPUT_EVENT_FAILED", message: "Could not create key-up event")
-            }
+            guard let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) else { throw HelperFailure(code: "UI_INPUT_EVENT_FAILED", message: "Could not create key-up event") }
             up.flags = flags
-            up.post(tap: .cghidEventTap)
+            try postInputEvent(up, pid: pid, mode: mode)
         }
+        try guardInputFocus(before, target: pid, mode: mode, preserveFocus: preserveFocus, operation: "key \(key ?? String(code))")
+        usleep(10_000)
         if delayMs > 0 && index + 1 < repeats { usleep(useconds_t(delayMs * 1_000)) }
     }
-    return ["key": key ?? "", "keyCode": Int(code), "modifiers": modifiers, "phase": phase, "repeat": repeats, "performed": true]
+    usleep(30_000)
+    return ["key": key ?? "", "keyCode": Int(code), "modifiers": modifiers, "phase": phase, "repeat": repeats, "inputMode": mode, "targetPid": jsonPid(pid), "performed": true]
 }
 
 func clipboardRead() -> [String: Any] {
@@ -666,6 +882,82 @@ func clipboardWrite(_ input: [String: Any]) throws -> [String: Any] {
     return ["writtenCharacters": text.count, "changeCount": pasteboard.changeCount]
 }
 
+func performSequence(_ input: [String: Any]) async throws -> [String: Any] {
+    guard let steps = input["steps"] as? [[String: Any]], !steps.isEmpty else {
+        throw HelperFailure(code: "UI_INVALID_INPUT", message: "sequence requires a non-empty steps array")
+    }
+    guard steps.count <= 64 else {
+        throw HelperFailure(code: "UI_INVALID_INPUT", message: "sequence supports at most 64 steps")
+    }
+    let started = Date()
+    var results: [[String: Any]] = []
+    for (index, step) in steps.enumerated() {
+        let op = try stringValue(step, "op").lowercased()
+        let args = step["args"] as? [String: Any] ?? [:]
+        do {
+            let value: [String: Any]
+            switch op {
+            case "sleep":
+                let ms = max(0, min(5_000, try intValue(args, "ms", default: 0)))
+                if ms > 0 { usleep(useconds_t(ms * 1_000)) }
+                value = ["sleptMs": ms]
+            case "ax_at": value = try axHitTest(args)
+            case "ax_query": value = try queryAX(args)
+            case "tree":
+                let pid = try targetPid(args)
+                value = try axTree(
+                    pid: pid,
+                    maxDepth: max(0, min(20, try intValue(args, "max_depth", default: 8))),
+                    maxElements: max(1, min(5_000, try intValue(args, "max_elements", default: 500))),
+                    includeValues: boolValue(args, "include_values", default: true)
+                )
+            case "action": value = try performAXAction(args)
+            case "mouse": value = try postMouse(args)
+            case "keyboard": value = try postKeyboard(args)
+            case "wait_for":
+                value = try waitForAXCondition(args)
+                if boolValue(step, "require_match", default: true), (value["matched"] as? NSNumber)?.boolValue != true {
+                    throw HelperFailure(code: "UI_POSTCONDITION_FAILED", message: "sequence wait_for did not match")
+                }
+            case "assert": value = try assertAXCondition(args)
+            case "window_action": value = try performWindowAction(args)
+            case "drag_drop": value = try performDragDrop(args)
+            case "dialogs": value = try dialogList(args)
+            case "dialog_action": value = try performDialogAction(args)
+            case "file_dialog": value = try performFileDialog(args)
+            case "app_activate":
+                let app = try findRunningApplication(args)
+                try activateApplication(app)
+                value = runningAppDictionary(app)
+            case "clipboard_read": value = clipboardRead()
+            case "clipboard_write": value = try clipboardWrite(args)
+            case "screenshot":
+                guard #available(macOS 14.0, *) else { throw HelperFailure(code: "UI_SCREENSHOT_UNSUPPORTED", message: "Native screenshots require macOS 14 or newer") }
+                let rawCapture = try await captureNativeTarget(args)
+                let capture = try annotateVirtualCursor(rawCapture, input: args)
+                value = try encodedCaptureDictionary(capture, format: try stringValue(args, "format", default: "jpeg"), quality: try doubleValue(args, "quality", default: 0.78))
+            case "ocr":
+                guard #available(macOS 14.0, *) else { throw HelperFailure(code: "UI_SCREENSHOT_UNSUPPORTED", message: "OCR requires macOS 14 or newer") }
+                let capture = try await captureNativeTarget(args)
+                var ocr = try recognizeText(capture.image, input: args)
+                ocr["target"] = capture.target
+                value = ocr
+            default:
+                throw HelperFailure(code: "UI_INVALID_INPUT", message: "Unsupported sequence operation '\(op)'")
+            }
+            results.append(["index": index, "op": op, "result": value])
+        } catch let failure as HelperFailure {
+            throw HelperFailure(code: "UI_SEQUENCE_STEP_FAILED", message: "step \(index) (\(op)) failed: \(failure.code): \(failure.message)")
+        }
+    }
+    return [
+        "performed": true,
+        "stepCount": results.count,
+        "elapsedMs": Int(Date().timeIntervalSince(started) * 1000),
+        "results": results,
+    ]
+}
+
 @main
 struct MacUIHelper {
     static func main() async {
@@ -681,11 +973,12 @@ struct MacUIHelper {
             case "status":
                 let frontmost = NSWorkspace.shared.frontmostApplication
                 result = [
-                    "helperVersion": "1.0.0",
+                    "helperVersion": "1.1.0",
                     "pid": ProcessInfo.processInfo.processIdentifier,
                     "macOS": ProcessInfo.processInfo.operatingSystemVersionString,
                     "accessibilityTrusted": AXIsProcessTrusted(),
                     "screenRecordingGranted": CGPreflightScreenCaptureAccess(),
+                    "postEventsGranted": CGPreflightPostEventAccess(),
                     "frontmostApplication": frontmost.map(runningAppDictionary) ?? NSNull(),
                     "displays": displayDictionaries(),
                 ]
@@ -702,11 +995,16 @@ struct MacUIHelper {
                 let depth = max(0, min(20, try intValue(input, "max_depth", default: 8)))
                 let elements = max(1, min(5_000, try intValue(input, "max_elements", default: 500)))
                 result = try axTree(pid: pid, maxDepth: depth, maxElements: elements, includeValues: boolValue(input, "include_values", default: true))
+            case "ax_at":
+                result = try axHitTest(input)
+            case "ax_query":
+                result = try queryAX(input)
             case "screenshot":
                 guard #available(macOS 14.0, *) else {
                     throw HelperFailure(code: "UI_SCREENSHOT_UNSUPPORTED", message: "Native screenshots require macOS 14 or newer")
                 }
-                let capture = try await captureNativeTarget(input)
+                let rawCapture = try await captureNativeTarget(input)
+                let capture = try annotateVirtualCursor(rawCapture, input: input)
                 result = try encodedCaptureDictionary(
                     capture,
                     format: try stringValue(input, "format", default: "jpeg"),
@@ -758,6 +1056,8 @@ struct MacUIHelper {
                 result = try postMouse(input)
             case "keyboard":
                 result = try postKeyboard(input)
+            case "sequence":
+                result = try await performSequence(input)
             case "clipboard_read":
                 result = clipboardRead()
             case "clipboard_write":

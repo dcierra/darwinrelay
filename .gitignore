@@ -29,3 +29,4 @@ http-token
 
 # Local native desktop-control build product
 /bin/MacUIHelper
+/bin/MacUICursorOverlay

@@ -477,7 +477,7 @@ final class Controller: NSObject, NSApplicationDelegate {
 
         desktopPermissionsItem.target = self
         desktopPermissionsItem.action = #selector(openDesktopPermissions)
-        desktopPermissionsItem.toolTip = "Accessibility drives native controls; Screen Recording captures pixels; Full Disk Access affects protected filesystem paths. Click to open Privacy & Security."
+        desktopPermissionsItem.toolTip = "Accessibility drives native controls; Screen Recording captures pixels; Input event permission gates synthesized mouse/keyboard events; Full Disk Access affects protected filesystem paths. Click to open Privacy & Security."
         menu.addItem(desktopPermissionsItem)
 
         let regen = NSMenuItem(title: "Rotate Token…", action: #selector(rotateToken), keyEquivalent: "")
@@ -553,9 +553,10 @@ final class Controller: NSObject, NSApplicationDelegate {
 
         let ax = AXIsProcessTrusted()
         let screen = CGPreflightScreenCaptureAccess()
+        let input = CGPreflightPostEventAccess()
         let fda = fullDiskAccessGranted()
         func mark(_ granted: Bool) -> String { granted ? "✓" : "✗" }
-        desktopPermissionsItem.title = "Desktop: AX \(mark(ax)) · Screen \(mark(screen)) · FDA \(mark(fda))"
+        desktopPermissionsItem.title = "Desktop: AX \(mark(ax)) · Screen \(mark(screen)) · Input \(mark(input)) · FDA \(mark(fda))"
     }
 
     // MARK: Actions

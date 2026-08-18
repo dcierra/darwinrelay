@@ -259,6 +259,51 @@ func captureNativeTarget(_ input: [String: Any]) async throws -> NativeCapture {
     }
 }
 
+func targetGlobalFrame(_ target: [String: Any]) -> CGRect? {
+    for key in ["bounds", "frame", "region"] {
+        guard let raw = target[key] as? [String: Any] else { continue }
+        var rect = CGRect.zero
+        let dictionary = raw as CFDictionary
+        if CGRectMakeWithDictionaryRepresentation(dictionary, &rect) { return rect }
+        if let x = raw["x"] as? NSNumber, let y = raw["y"] as? NSNumber,
+           let width = raw["width"] as? NSNumber, let height = raw["height"] as? NSNumber {
+            return CGRect(x: x.doubleValue, y: y.doubleValue, width: width.doubleValue, height: height.doubleValue)
+        }
+    }
+    return nil
+}
+
+func annotateVirtualCursor(_ capture: NativeCapture, input: [String: Any]) throws -> NativeCapture {
+    guard let cursor = input["virtual_cursor"] as? [String: Any], boolValue(cursor, "visible", default: true),
+          let frame = targetGlobalFrame(capture.target) else { return capture }
+    let point = try globalPoint(cursor)
+    guard frame.width > 0, frame.height > 0, frame.contains(point) else { return capture }
+    let width = capture.image.width
+    let height = capture.image.height
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+    guard let context = CGContext(
+        data: nil, width: width, height: height, bitsPerComponent: 8,
+        bytesPerRow: width * 4, space: colorSpace,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else { throw HelperFailure(code: "UI_SCREENSHOT_CURSOR_FAILED", message: "Could not allocate virtual-cursor image context") }
+    context.draw(capture.image, in: CGRect(x: 0, y: 0, width: width, height: height))
+    let px = (point.x - frame.minX) / frame.width * CGFloat(width)
+    let pyTop = (point.y - frame.minY) / frame.height * CGFloat(height)
+    let py = CGFloat(height) - pyTop
+    let radius = max(7.0, min(14.0, CGFloat(width + height) / 240.0))
+    context.setFillColor(NSColor.white.withAlphaComponent(0.95).cgColor)
+    context.fillEllipse(in: CGRect(x: px - radius - 2, y: py - radius - 2, width: (radius + 2) * 2, height: (radius + 2) * 2))
+    context.setFillColor(NSColor.systemBlue.cgColor)
+    context.fillEllipse(in: CGRect(x: px - radius, y: py - radius, width: radius * 2, height: radius * 2))
+    context.setStrokeColor(NSColor.black.withAlphaComponent(0.8).cgColor)
+    context.setLineWidth(1.5)
+    context.strokeEllipse(in: CGRect(x: px - radius, y: py - radius, width: radius * 2, height: radius * 2))
+    guard let image = context.makeImage() else { throw HelperFailure(code: "UI_SCREENSHOT_CURSOR_FAILED", message: "Could not render virtual cursor") }
+    var target = capture.target
+    target["virtualCursor"] = ["x": point.x, "y": point.y]
+    return NativeCapture(image: image, target: target)
+}
+
 func encodedCaptureDictionary(_ capture: NativeCapture, format: String, quality: Double) throws -> [String: Any] {
     let encoded = try encodeImage(capture.image, format: format, quality: quality)
     return [
@@ -487,7 +532,7 @@ func axElementMatches(_ element: AXUIElement, selector: [String: Any]) -> Bool {
 }
 
 func findAXElement(pid: pid_t, selector: [String: Any], maxDepth: Int, maxElements: Int) -> AXLocatedElement? {
-    let root = AXUIElementCreateApplication(pid)
+    let root = applicationElement(pid)
     var visited = 0
     func walk(_ element: AXUIElement, path: [Int], depth: Int) -> AXLocatedElement? {
         guard visited < maxElements else { return nil }
@@ -504,7 +549,7 @@ func findAXElement(pid: pid_t, selector: [String: Any], maxDepth: Int, maxElemen
 }
 
 func findPathToElement(pid: pid_t, target: AXUIElement, maxDepth: Int = 8, maxElements: Int = 2_000) -> [Int]? {
-    let root = AXUIElementCreateApplication(pid)
+    let root = applicationElement(pid)
     var visited = 0
     func walk(_ element: AXUIElement, path: [Int], depth: Int) -> [Int]? {
         guard visited < maxElements else { return nil }
@@ -517,6 +562,134 @@ func findPathToElement(pid: pid_t, target: AXUIElement, maxDepth: Int = 8, maxEl
         return nil
     }
     return walk(root, path: [], depth: 0)
+}
+
+func axHitTest(_ input: [String: Any]) throws -> [String: Any] {
+    try requireAccessibility()
+    let pid = try targetPid(input)
+    let point = try globalPoint(input)
+    let root = applicationElement(pid)
+    var hit: AXUIElement?
+    let error = AXUIElementCopyElementAtPosition(root, Float(point.x), Float(point.y), &hit)
+    guard error == .success, let hit else {
+        throw HelperFailure(code: "UI_AX_HIT_TEST_FAILED", message: "No Accessibility element was exposed at (\(point.x), \(point.y)); AX error \(error.rawValue)")
+    }
+    guard let path = findPathToElement(pid: pid, target: hit, maxDepth: 20, maxElements: 5_000) else {
+        throw HelperFailure(code: "UI_AX_HIT_TEST_UNADDRESSABLE", message: "Accessibility hit-test found an element that is not addressable through the current application tree")
+    }
+    var result = describeAXElement(hit, pid: pid, path: path, includeValue: boolValue(input, "include_value", default: true))
+    result["pid"] = Int(pid)
+    result["point"] = ["x": point.x, "y": point.y]
+    result.merge(displayRouting(for: CGRect(x: point.x, y: point.y, width: 1, height: 1))) { current, _ in current }
+    return result
+}
+
+func axQuerySearchKey(for selector: [String: Any]) -> String {
+    let roles: [String: String] = [
+        kAXButtonRole as String: "AXButtonSearchKey",
+        kAXCheckBoxRole as String: "AXCheckBoxSearchKey",
+        kAXComboBoxRole as String: "AXComboBoxSearchKey",
+        kAXImageRole as String: "AXImageSearchKey",
+        "AXLink": "AXLinkSearchKey",
+        kAXListRole as String: "AXListSearchKey",
+        kAXMenuRole as String: "AXMenuSearchKey",
+        kAXMenuItemRole as String: "AXMenuItemSearchKey",
+        kAXRadioButtonRole as String: "AXRadioButtonSearchKey",
+        kAXStaticTextRole as String: "AXStaticTextSearchKey",
+        kAXTableRole as String: "AXTableSearchKey",
+        kAXTextAreaRole as String: "AXTextAreaSearchKey",
+        kAXTextFieldRole as String: "AXTextFieldSearchKey",
+    ]
+    return (selector["role"] as? String).flatMap { roles[$0] } ?? "AXAnyTypeSearchKey"
+}
+
+func axQuerySearchText(_ selector: [String: Any]) -> String? {
+    for key in ["title", "title_contains", "description", "description_contains", "value", "value_contains", "identifier", "identifier_contains"] {
+        if let value = selector[key] as? String, !value.isEmpty { return value }
+    }
+    return nil
+}
+
+func boundedAXMatches(pid: pid_t, selector: [String: Any], maxDepth: Int, maxElements: Int, limit: Int, immediateOnly: Bool) -> [AXLocatedElement] {
+    let root = applicationElement(pid)
+    var visited = 0
+    var matches: [AXLocatedElement] = []
+    func walk(_ element: AXUIElement, path: [Int], depth: Int) {
+        guard visited < maxElements, matches.count < limit else { return }
+        visited += 1
+        if depth > 0, axElementMatches(element, selector: selector) {
+            matches.append(AXLocatedElement(element: element, path: path))
+            if matches.count >= limit { return }
+        }
+        let allowedDepth = immediateOnly ? 1 : maxDepth
+        guard depth < allowedDepth else { return }
+        for (index, child) in axChildren(element).enumerated() {
+            walk(child, path: path + [index], depth: depth + 1)
+            if visited >= maxElements || matches.count >= limit { break }
+        }
+    }
+    walk(root, path: [], depth: 0)
+    return matches
+}
+
+func queryAX(_ input: [String: Any]) throws -> [String: Any] {
+    try requireAccessibility()
+    let pid = try targetPid(input)
+    let selector = input["selector"] as? [String: Any] ?? [:]
+    let limit = max(1, min(100, try intValue(input, "limit", default: 20)))
+    let maxDepth = max(1, min(20, try intValue(input, "max_depth", default: 12)))
+    let maxElements = max(1, min(10_000, try intValue(input, "max_elements", default: 2_000)))
+    let visibleOnly = boolValue(input, "visible_only", default: true)
+    let immediateOnly = boolValue(input, "immediate_descendants_only", default: false)
+    let direction = try stringValue(input, "direction", default: "next").lowercased()
+    guard direction == "next" || direction == "previous" else {
+        throw HelperFailure(code: "UI_INVALID_INPUT", message: "AX query direction must be next or previous")
+    }
+
+    let root = applicationElement(pid)
+    var optimized = false
+    var unaddressable = 0
+    var located: [AXLocatedElement] = []
+    var predicate: [String: Any] = [
+        "AXSearchKey": axQuerySearchKey(for: selector),
+        "AXVisibleOnly": visibleOnly,
+        "AXResultsLimit": limit,
+        "AXDirection": direction == "previous" ? "AXDirectionPrevious" : "AXDirectionNext",
+        "AXImmediateDescendantsOnly": immediateOnly,
+    ]
+    if let text = axQuerySearchText(selector) { predicate["AXSearchText"] = text }
+    var raw: CFTypeRef?
+    let searchError = AXUIElementCopyParameterizedAttributeValue(
+        root,
+        "AXUIElementsForSearchPredicate" as CFString,
+        predicate as CFDictionary,
+        &raw
+    )
+    if searchError == .success, let candidates = raw as? [AXUIElement] {
+        optimized = true
+        for candidate in candidates where located.count < limit {
+            guard axElementMatches(candidate, selector: selector) else { continue }
+            if let path = findPathToElement(pid: pid, target: candidate, maxDepth: maxDepth, maxElements: maxElements) {
+                located.append(AXLocatedElement(element: candidate, path: path))
+            } else {
+                unaddressable += 1
+            }
+        }
+    }
+    if located.isEmpty {
+        located = boundedAXMatches(pid: pid, selector: selector, maxDepth: maxDepth, maxElements: maxElements, limit: limit, immediateOnly: immediateOnly)
+        if direction == "previous" { located.reverse() }
+    }
+    let includeValue = boolValue(input, "include_value", default: true)
+    let elements = located.map { describeAXElement($0.element, pid: pid, path: $0.path, includeValue: includeValue) }
+    return [
+        "pid": Int(pid),
+        "count": elements.count,
+        "elements": elements,
+        "optimizedSearchUsed": optimized,
+        "unaddressableOptimizedMatches": unaddressable,
+        "searchError": searchError.rawValue,
+    ]
 }
 
 func resolveRefLenient(_ ref: String) throws -> (pid_t, AXUIElement, [Int]) {
@@ -586,7 +759,7 @@ func waitForAXCondition(_ input: [String: Any]) throws -> [String: Any] {
     let pid = try targetPid(input)
     let timeoutMs = max(0, min(120_000, try intValue(input, "timeout_ms", default: 15_000)))
     let pollMs = max(25, min(5_000, try intValue(input, "poll_interval_ms", default: 250)))
-    let app = AXUIElementCreateApplication(pid)
+    let app = applicationElement(pid)
     let box = AXWakeBox()
     let opaque = Unmanaged.passUnretained(box).toOpaque()
     var observer: AXObserver?
@@ -698,7 +871,7 @@ func cgWindowRecord(windowId: CGWindowID) -> CGWindowRecord? {
 }
 
 func axWindowsForPid(_ pid: pid_t) -> [AXUIElement] {
-    let app = AXUIElementCreateApplication(pid)
+    let app = applicationElement(pid)
     return (axCopy(app, kAXWindowsAttribute as CFString) as? [AXUIElement]) ?? []
 }
 
@@ -752,7 +925,7 @@ func resolveAXWindow(_ input: [String: Any]) throws -> (pid_t, AXUIElement, [Int
         return (record.ownerPid, window, path)
     }
     let pid = try targetPid(input)
-    let app = AXUIElementCreateApplication(pid)
+    let app = applicationElement(pid)
     if let focused = axCopy(app, kAXFocusedWindowAttribute as CFString), CFGetTypeID(focused) == AXUIElementGetTypeID() {
         let window = focused as! AXUIElement
         return (pid, window, findPathToElement(pid: pid, target: window) ?? [])
@@ -858,14 +1031,14 @@ func centerOfRef(_ ref: String) throws -> CGPoint {
     return CGPoint(x: frame.midX, y: frame.midY)
 }
 
-func performDrag(from: CGPoint, to: CGPoint, durationMs: Int, button: CGMouseButton = .left) throws {
+func performDrag(from: CGPoint, to: CGPoint, durationMs: Int, button: CGMouseButton = .left, pid: pid_t? = nil, mode: String = "foreground") throws {
     let downType: CGEventType = button == .right ? .rightMouseDown : .leftMouseDown
     let dragType: CGEventType = button == .right ? .rightMouseDragged : .leftMouseDragged
     let upType: CGEventType = button == .right ? .rightMouseUp : .leftMouseUp
     guard let down = CGEvent(mouseEventSource: nil, mouseType: downType, mouseCursorPosition: from, mouseButton: button) else {
         throw HelperFailure(code: "UI_INPUT_EVENT_FAILED", message: "Could not create drag start event")
     }
-    down.post(tap: .cghidEventTap)
+    try postInputEvent(down, pid: pid, mode: mode)
     let steps = max(2, min(120, durationMs / 12))
     for step in 1...steps {
         let t = Double(step) / Double(steps)
@@ -873,13 +1046,13 @@ func performDrag(from: CGPoint, to: CGPoint, durationMs: Int, button: CGMouseBut
         guard let drag = CGEvent(mouseEventSource: nil, mouseType: dragType, mouseCursorPosition: point, mouseButton: button) else {
             throw HelperFailure(code: "UI_INPUT_EVENT_FAILED", message: "Could not create drag event")
         }
-        drag.post(tap: .cghidEventTap)
+        try postInputEvent(drag, pid: pid, mode: mode)
         if durationMs > 0 { usleep(useconds_t(max(1, durationMs * 1_000 / steps))) }
     }
     guard let up = CGEvent(mouseEventSource: nil, mouseType: upType, mouseCursorPosition: to, mouseButton: button) else {
         throw HelperFailure(code: "UI_INPUT_EVENT_FAILED", message: "Could not create drag end event")
     }
-    up.post(tap: .cghidEventTap)
+    try postInputEvent(up, pid: pid, mode: mode)
 }
 
 func performDragDrop(_ input: [String: Any]) throws -> [String: Any] {
@@ -899,7 +1072,7 @@ func performDragDrop(_ input: [String: Any]) throws -> [String: Any] {
 // MARK: - Native dialogs / file pickers
 
 func collectDialogElements(pid: pid_t, maxElements: Int = 2_000) -> [AXLocatedElement] {
-    let root = AXUIElementCreateApplication(pid)
+    let root = applicationElement(pid)
     var result: [AXLocatedElement] = []
     var visited = 0
     func walk(_ element: AXUIElement, path: [Int], depth: Int) {
@@ -1104,8 +1277,8 @@ func performFileDialog(_ input: [String: Any]) throws -> [String: Any] {
     if requireDialog && waitForFilePanel(pid: pid, timeoutMs: 2_000) == nil {
         throw HelperFailure(code: "UI_DIALOG_NOT_FOUND", message: "No native NSOpenPanel/NSSavePanel is visible for the target application")
     }
-    if let app = NSRunningApplication(processIdentifier: pid) { _ = app.activate(options: [.activateIgnoringOtherApps]) }
-    Thread.sleep(forTimeInterval: 0.08)
+    try ensureApplicationFrontmost(pid)
+    Thread.sleep(forTimeInterval: 0.06)
 
     let navigationPath: String
     let saveName: String?
@@ -1126,9 +1299,12 @@ func performFileDialog(_ input: [String: Any]) throws -> [String: Any] {
             pathField = existing
             break
         }
-        if let app = NSRunningApplication(processIdentifier: pid) { _ = app.activate(options: [.activateIgnoringOtherApps]) }
-        Thread.sleep(forTimeInterval: 0.10)
-        _ = try postKeyboard(["key": "g", "modifiers": ["command", "shift"]])
+        try ensureApplicationFrontmost(pid)
+        Thread.sleep(forTimeInterval: 0.08)
+        try postForegroundShortcut(
+            keyCode: CGKeyCode(kVK_ANSI_G),
+            modifiers: [(CGKeyCode(kVK_Command), .maskCommand), (CGKeyCode(kVK_Shift), .maskShift)]
+        )
         if let opened = waitForFilePanelElement(pid: pid, identifier: "PathTextField", timeoutMs: 900) {
             pathField = opened
             break
@@ -1151,10 +1327,20 @@ func performFileDialog(_ input: [String: Any]) throws -> [String: Any] {
         guard setPath == .success else {
             throw HelperFailure(code: "UI_FILE_DIALOG_NAVIGATION_FAILED", message: "Could not set Go-to-Folder path (AX error \(setPath.rawValue))")
         }
-        _ = AXUIElementSetAttributeValue(liveField, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-        Thread.sleep(forTimeInterval: 0.08)
+        try ensureApplicationFrontmost(pid)
+        let focusResult = AXUIElementSetAttributeValue(liveField, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        guard focusResult == .success else {
+            throw HelperFailure(code: "UI_FILE_DIALOG_NAVIGATION_FAILED", message: "Could not focus Go-to-Folder path field (AX error \(focusResult.rawValue))")
+        }
+        let focusDeadline = Date().addingTimeInterval(0.35)
+        while Date() < focusDeadline && axBool(liveField, kAXFocusedAttribute as CFString) != true {
+            CFRunLoopRunInMode(.defaultMode, 0.03, false)
+        }
+        guard axBool(liveField, kAXFocusedAttribute as CFString) == true else {
+            throw HelperFailure(code: "UI_FILE_DIALOG_NAVIGATION_FAILED", message: "Go-to-Folder path field did not become focused")
+        }
         _ = try postKeyboard(["key": "return"])
-        navigationAccepted = waitForFilePanelElementGone(pid: pid, identifier: "PathTextField", timeoutMs: 900)
+        navigationAccepted = waitForFilePanelElementGone(pid: pid, identifier: "PathTextField", timeoutMs: 1_100)
     }
     guard navigationAccepted else {
         throw HelperFailure(code: "UI_FILE_DIALOG_NAVIGATION_FAILED", message: "Go-to-Folder sheet did not accept the requested path after bounded commit retries")

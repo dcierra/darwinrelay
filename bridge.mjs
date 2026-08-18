@@ -12,8 +12,10 @@ import { fileURLToPath } from "node:url";
 import { createFederation, consumePersonalApproval } from "./lib/federation.mjs";
 import { backgroundChromeCall, backgroundChromeStatus } from "./lib/chrome-extension-client.mjs";
 import { callMacUiHelper, macUiHelperAvailable, resolveMacUiHelper } from "./lib/mac-ui-helper.mjs";
+import { MacUiCursor, macUiCursorAvailable, resolveMacUiCursor } from "./lib/mac-ui-cursor.mjs";
+import { advancedBrowserConfig, advancedBrowserRequest, advancedBrowserSocketStatus } from "./lib/advanced-browser.mjs";
 
-const BRIDGE_VERSION = "0.4.0-desktop.1";
+const BRIDGE_VERSION = "0.5.0-desktop.1";
 const SERVER_NAME = "mac-developer-bridge";
 const SERVER_TITLE = "Mac Developer Bridge";
 const MODERN_PROTOCOL = "2026-07-28";
@@ -38,6 +40,11 @@ const CODEX_BIN = process.env.CODEX_BIN || "codex";
 const BRIDGE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const MAC_UI_HELPER = resolveMacUiHelper({ bridgeDir: BRIDGE_DIR });
 const MAC_UI_AVAILABLE = macUiHelperAvailable(MAC_UI_HELPER);
+const MAC_UI_CURSOR_HELPER = resolveMacUiCursor({ bridgeDir: BRIDGE_DIR });
+const MAC_UI_CURSOR_AVAILABLE = macUiCursorAvailable(MAC_UI_CURSOR_HELPER);
+const macUiCursor = new MacUiCursor(MAC_UI_CURSOR_HELPER);
+const virtualCursorState = { visible: false, x: null, y: null, displayId: null };
+const ADVANCED_BROWSER = advancedBrowserConfig();
 
 // Interactive pty sessions. Every limit below is a bound on a publicly reachable
 // endpoint, so each one carries the number it was measured against.
@@ -464,10 +471,31 @@ function auditSafeArguments(tool, args) {
     const digest = crypto.createHash("sha256").update(source[field], "utf8").digest("hex").slice(0, 16);
     return { ...source, [field]: `[REDACTED ${bytes} bytes sha256:${digest}]` };
   };
+  const redactJsonField = (source, field) => {
+    if (!source || source[field] === undefined) return source;
+    const encoded = safeJson(source[field]);
+    const bytes = Buffer.byteLength(encoded, "utf8");
+    const digest = crypto.createHash("sha256").update(encoded, "utf8").digest("hex").slice(0, 16);
+    return { ...source, [field]: `[REDACTED JSON ${bytes} bytes sha256:${digest}]` };
+  };
   if (tool === "pty_write") return redactField(args, "data");
   if (tool === "ui_keyboard") return redactField(args, "text");
   if (tool === "ui_clipboard_write") return redactField(args, "text");
   if (tool === "ui_action" && args?.action === "set_value") return redactField(args, "value");
+  if (tool === "browser_cdp_call") return redactJsonField(args, "params");
+  if (tool === "ui_sequence" && Array.isArray(args?.steps)) {
+    return {
+      ...args,
+      steps: args.steps.map((step) => {
+        if (!step || typeof step !== "object" || Array.isArray(step)) return step;
+        let stepArgs = step.args && typeof step.args === "object" && !Array.isArray(step.args) ? step.args : {};
+        if (step.op === "keyboard") stepArgs = redactField(stepArgs, "text");
+        if (step.op === "clipboard_write") stepArgs = redactField(stepArgs, "text");
+        if (step.op === "action" && stepArgs.action === "set_value") stepArgs = redactField(stepArgs, "value");
+        return { ...step, args: stepArgs };
+      }),
+    };
+  }
   return args;
 }
 
@@ -744,6 +772,7 @@ const UI_CAPTURE_PROPERTIES = {
   format: { type: "string", enum: ["jpeg", "png"], default: "jpeg" },
   quality: { type: "number", minimum: 0.1, maximum: 1, default: 0.78 },
   include_cursor: { type: "boolean", default: false },
+  show_virtual_cursor: { type: "boolean", default: true, description: "Overlay MDB's independent virtual AI cursor on returned screenshots when it is visible." },
 };
 const UI_WAIT_PROPERTIES = {
   pid: { type: "integer", minimum: 1 }, ref: { type: "string" }, selector: UI_SELECTOR_SCHEMA,
@@ -766,7 +795,7 @@ const TOOLS = [
   {
     name: "ui_status",
     title: "Mac desktop control status",
-    description: "Inspect native macOS desktop-control readiness: Accessibility trust, Screen Recording permission, frontmost app, and displays. Read-only and does not request permissions.",
+    description: "Inspect native macOS desktop-control readiness: Accessibility trust, Screen Recording, event-posting permission, frontmost app, and displays. Read-only and does not request permissions.",
     inputSchema: { type: "object", additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -810,6 +839,52 @@ const TOOLS = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "ui_ax_at",
+    title: "Resolve Mac Accessibility element at point",
+    description: "Hit-test a Quartz coordinate inside a target application and return the semantic fingerprinted AX ref at that point. Bridges screenshot/OCR coordinates back to fail-closed Accessibility actions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pid: { type: "integer", minimum: 1 }, x: { type: "number" }, y: { type: "number" },
+        display_id: { type: "integer", minimum: 0 }, include_value: { type: "boolean", default: true },
+      },
+      required: ["x", "y"], additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "ui_ax_query",
+    title: "Search Mac Accessibility elements",
+    description: "Run a targeted Accessibility search with optimized AX search predicates when supported and a bounded tree fallback. Returns actionable fingerprinted refs without dumping the full tree.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pid: { type: "integer", minimum: 1 }, selector: UI_SELECTOR_SCHEMA,
+        visible_only: { type: "boolean", default: true }, limit: { type: "integer", minimum: 1, maximum: 100, default: 20 },
+        direction: { type: "string", enum: ["next", "previous"], default: "next" },
+        immediate_descendants_only: { type: "boolean", default: false },
+        max_depth: { type: "integer", minimum: 1, maximum: 20, default: 12 },
+        max_elements: { type: "integer", minimum: 1, maximum: 10000, default: 2000 },
+        include_value: { type: "boolean", default: true },
+      }, additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "ui_cursor",
+    title: "Control independent AI cursor",
+    description: "Move/show/hide the click-through MDB virtual cursor without moving the physical mouse. This cursor is visual only; ui_mouse performs actual input. Screenshot tools can render the same cursor position.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["status", "move", "show", "hide", "click"], default: "status" },
+        x: { type: "number" }, y: { type: "number" }, display_id: { type: "integer", minimum: 0 },
+        duration_ms: { type: "integer", minimum: 0, maximum: 10000, default: 160 },
+      }, additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
     name: "ui_screenshot",
@@ -885,6 +960,9 @@ const TOOLS = [
       type: "object",
       properties: {
         action: { type: "string", enum: ["move", "click", "double_click", "right_click", "scroll", "drag"] },
+        pid: { type: "integer", minimum: 1 }, input_mode: { type: "string", enum: ["auto", "background", "foreground"], default: "auto" },
+        preserve_focus: { type: "boolean", default: true }, activate_target: { type: "boolean", default: false },
+        allow_foreground_fallback: { type: "boolean", default: true }, verify: { type: "object", properties: { ...UI_WAIT_PROPERTIES }, additionalProperties: false },
         x: { type: "number" }, y: { type: "number" }, display_id: { type: "integer", minimum: 0 },
         to_x: { type: "number" }, to_y: { type: "number" }, to_display_id: { type: "integer", minimum: 0 },
         duration_ms: { type: "integer", minimum: 0, maximum: 10000, default: 450 },
@@ -902,10 +980,35 @@ const TOOLS = [
       type: "object",
       properties: {
         text: { type: "string", maxLength: 500000 }, key: { type: "string" }, key_code: { type: "integer", minimum: 0, maximum: 255 },
+        pid: { type: "integer", minimum: 1 }, input_mode: { type: "string", enum: ["auto", "background", "foreground"], default: "auto" },
+        preserve_focus: { type: "boolean", default: true }, activate_target: { type: "boolean", default: false },
+        allow_foreground_fallback: { type: "boolean", default: true }, verify: { type: "object", properties: { ...UI_WAIT_PROPERTIES }, additionalProperties: false },
         modifiers: { type: "array", items: { type: "string", enum: ["command", "cmd", "shift", "option", "alt", "control", "ctrl", "fn", "function"] }, maxItems: 4 },
         phase: { type: "string", enum: ["press", "down", "up"], default: "press" }, repeat: { type: "integer", minimum: 1, maximum: 100, default: 1 },
         delay_ms: { type: "integer", minimum: 0, maximum: 2000, default: 0 },
       }, additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  },
+  {
+    name: "ui_sequence",
+    title: "Run bounded Mac UI sequence",
+    description: "Execute up to 64 deterministic native UI primitives inside one MacUIHelper process, reducing MCP round trips and races. Stop at genuine decision boundaries; wait_for steps fail the sequence by default when their postcondition does not match.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        steps: {
+          type: "array", minItems: 1, maxItems: 64,
+          items: {
+            type: "object",
+            properties: {
+              op: { type: "string", enum: ["sleep", "ax_at", "ax_query", "tree", "action", "mouse", "keyboard", "wait_for", "assert", "window_action", "drag_drop", "dialogs", "dialog_action", "file_dialog", "app_activate", "clipboard_read", "clipboard_write", "screenshot", "ocr"] },
+              args: { type: "object" }, require_match: { type: "boolean", default: true },
+            },
+            required: ["op"], additionalProperties: false,
+          },
+        },
+      }, required: ["steps"], additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   },
@@ -1018,6 +1121,46 @@ const TOOLS = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  },
+  {
+    name: "browser_cdp_status",
+    title: "Inspect optional raw CDP backend",
+    description: "Inspect the explicit opt-in Browser Harness raw-CDP backend and its daemon socket. This backend is separate from MDB's managed background Chrome workspace and is disabled unless MAC_DEV_BRIDGE_ADVANCED_BROWSER=1 was set before startup.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "browser_cdp_call",
+    title: "Call raw Chrome DevTools Protocol",
+    description: "Call one raw CDP method through an already-running Browser Harness daemon. Explicit opt-in only; blocked when Strict approvals is enabled because arbitrary CDP cannot be soundly constrained to URL grants.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        method: { type: "string", minLength: 3, maxLength: 160 }, params: { type: "object" },
+        session_id: { type: "string", minLength: 1, maxLength: 256 },
+        timeout_ms: { type: "integer", minimum: 100, maximum: 120000, default: 8000 },
+      }, required: ["method"], additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  },
+  {
+    name: "browser_cdp_session",
+    title: "Inspect or select Browser Harness CDP session",
+    description: "Read the Browser Harness current page/session or explicitly select an already-attached target/session. Explicit opt-in only and blocked by Strict approvals for session changes.",
+    inputSchema: {
+      type: "object", properties: {
+        action: { type: "string", enum: ["current", "session", "set"], default: "current" },
+        target_id: { type: "string", minLength: 1, maxLength: 256 }, session_id: { type: "string", minLength: 1, maxLength: 256 },
+      }, additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  },
+  {
+    name: "browser_cdp_events",
+    title: "Drain Browser Harness CDP events",
+    description: "Drain buffered CDP events from the optional Browser Harness daemon. Explicit opt-in only; blocked when Strict approvals is enabled because events may contain data from unrestricted browser targets.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
   {
     name: "chrome_workspace_status",
@@ -1549,6 +1692,8 @@ async function uiApprovalTargetApps(tool, args = {}) {
     } catch {}
   }
 
+  const explicitAppName = typeof args.name === "string" ? args.name.trim() : "";
+  if ((tool === "ui_app_activate" || tool.endsWith(":app_activate")) && explicitAppName) names.add(explicitAppName);
   const bundleId = typeof args.bundle_id === "string" ? args.bundle_id.trim() : "";
   if (pids.size > 0 || bundleId) {
     try {
@@ -1579,6 +1724,26 @@ async function uiApprovalTargetApps(tool, args = {}) {
 async function requireNativeUiApproval(tool, args) {
   const settings = await readOperatorSettings();
   if (!settings.strictApprovals) return null;
+  if (tool === "ui_sequence") {
+    const mutationOps = new Set(["action", "mouse", "keyboard", "window_action", "drag_drop", "dialog_action", "file_dialog", "app_activate", "clipboard_write"]);
+    const apps = new Set();
+    let hasMutation = false;
+    for (const step of args?.steps ?? []) {
+      if (!step || typeof step !== "object" || !mutationOps.has(step.op)) continue;
+      hasMutation = true;
+      for (const app of await uiApprovalTargetApps(`ui_sequence:${step.op}`, step.args ?? {})) apps.add(app);
+    }
+    if (!hasMutation) return null;
+    const targets = apps.size ? [...apps] : ["Mac desktop"];
+    const risk = { reason: "native-ui-tool:ui_sequence", apps: targets };
+    const grant = await consumeForegroundGuiApproval(risk);
+    if (!grant) {
+      const error = new Error(`Desktop UI sequence is blocked because Strict approvals is enabled (targets: ${targets.join(", ")}). Approve a one-time foreground action with scripts/approve-foreground-gui.sh.`);
+      error.code = "GUI_FOCUS_BLOCKED";
+      throw error;
+    }
+    return grant;
+  }
   const apps = await uiApprovalTargetApps(tool, args);
   const risk = { reason: `native-ui-tool:${tool}`, apps };
   const grant = await consumeForegroundGuiApproval(risk);
@@ -1590,7 +1755,7 @@ async function requireNativeUiApproval(tool, args) {
   return grant;
 }
 
-function uiCapturePayload(args = {}, { defaultFormat = "jpeg", defaultQuality = 0.78 } = {}) {
+function uiCapturePayload(args = {}, { defaultFormat = "jpeg", defaultQuality = 0.78, includeVirtualCursor = false } = {}) {
   const payload = {
     target: optionalString(args, "target", args?.window_id !== undefined ? "window" : (args?.region !== undefined ? "region" : "display")),
     max_width: optionalInteger(args, "max_width", 1_600, 64, 8_192),
@@ -1610,6 +1775,12 @@ function uiCapturePayload(args = {}, { defaultFormat = "jpeg", defaultQuality = 
     }
     if (region.width <= 0 || region.height <= 0) throw new Error("region width and height must be positive");
     payload.region = region;
+  }
+  if (includeVirtualCursor && optionalBoolean(args, "show_virtual_cursor", true) && virtualCursorState.visible && Number.isFinite(virtualCursorState.x) && Number.isFinite(virtualCursorState.y)) {
+    payload.virtual_cursor = {
+      x: virtualCursorState.x, y: virtualCursorState.y, visible: true,
+      ...(Number.isInteger(virtualCursorState.displayId) ? { display_id: virtualCursorState.displayId } : {}),
+    };
   }
   if (!['display', 'window', 'region'].includes(payload.target)) throw new Error("'target' must be display, window, or region");
   if (payload.target === 'window' && !payload.window_id) throw new Error("window capture requires window_id");
@@ -1631,6 +1802,33 @@ function uiWaitPayload(args = {}) {
   };
   if (!payload.ref && !payload.selector) payload.selector = {};
   return payload;
+}
+
+async function verifyUiInputWithFallback(toolName, helperCommand, args, payload, initialResult) {
+  if (args?.verify === undefined) return initialResult;
+  if (!args.verify || typeof args.verify !== "object" || Array.isArray(args.verify)) throw new Error("'verify' must be an object");
+  const verifyPayload = uiWaitPayload(args.verify);
+  if (verifyPayload.pid === undefined && Number.isInteger(payload.pid)) verifyPayload.pid = payload.pid;
+  const verifyOnce = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return await callNativeUi("wait_for", verifyPayload, { timeoutMs: verifyPayload.timeout_ms + 5_000 });
+  };
+  let verification = await verifyOnce();
+  if (verification.matched) return { ...initialResult, verification, foregroundFallbackUsed: false };
+
+  const requestedMode = typeof args?.input_mode === "string" ? args.input_mode : "auto";
+  const allowFallback = optionalBoolean(args, "allow_foreground_fallback", true);
+  if (requestedMode === "auto" && allowFallback && Number.isInteger(payload.pid) && initialResult?.inputMode === "background") {
+    const fallbackPayload = { ...payload, input_mode: "foreground", activate_target: true, preserve_focus: false };
+    const fallbackResult = await callNativeUi(helperCommand, fallbackPayload, { timeoutMs: 15_000 });
+    verification = await verifyOnce();
+    if (verification.matched) {
+      return { ...fallbackResult, verification, foregroundFallbackUsed: true, backgroundAttempt: initialResult };
+    }
+  }
+  const error = new Error("Input postcondition did not match after bounded verification" + (requestedMode === "auto" && allowFallback ? " and foreground fallback" : ""));
+  error.code = "UI_POSTCONDITION_FAILED";
+  throw error;
 }
 
 function uiImageResult(image, structured) {
@@ -2239,6 +2437,20 @@ async function ensureBackgroundChromeGrant() {
   return { ...pool, accessMode: "strict", strictApprovals: true };
 }
 
+async function requireAdvancedBrowserAccess(toolName) {
+  if (!ADVANCED_BROWSER.enabled) {
+    const error = new Error("Advanced Browser/CDP backend is disabled; set MAC_DEV_BRIDGE_ADVANCED_BROWSER=1 before starting MDB.");
+    error.code = "ADVANCED_BROWSER_DISABLED";
+    throw error;
+  }
+  const settings = await readOperatorSettings();
+  if (settings.strictApprovals) {
+    const error = new Error(`Raw CDP tool '${toolName}' is blocked while Strict approvals is enabled because arbitrary CDP methods/events cannot be reliably constrained to the current URL-pattern grant. Use the managed chrome_* tools instead.`);
+    error.code = "ADVANCED_BROWSER_STRICT_BLOCKED";
+    throw error;
+  }
+}
+
 async function callBackgroundChrome(toolName, method, args) {
   let pool;
   try {
@@ -2677,8 +2889,9 @@ const federationReady = federation.start().then(() => {
 // one of the two would be unreachable in one direction and unguarded in the other.
 function advertisedTools() {
   let base = ptyAvailable ? TOOLS : TOOLS.filter((tool) => !tool.name.startsWith("pty_"));
-  if (process.platform !== "darwin") base = base.filter((tool) => !tool.name.startsWith("chrome_") && !tool.name.startsWith("ui_"));
+  if (process.platform !== "darwin") base = base.filter((tool) => !tool.name.startsWith("chrome_") && !tool.name.startsWith("ui_") && !tool.name.startsWith("browser_cdp_"));
   if (!MAC_UI_AVAILABLE) base = base.filter((tool) => !tool.name.startsWith("ui_"));
+  if (!ADVANCED_BROWSER.enabled) base = base.filter((tool) => !tool.name.startsWith("browser_cdp_"));
   const federated = federation.listTools();
   return federated.length === 0 ? base : base.concat(federated);
 }
@@ -3328,6 +3541,11 @@ function teardownAll(reason) {
   } catch (error) {
     stderr(`in-flight teardown failed: ${error?.message || error}`);
   }
+  try {
+    macUiCursor.stop();
+  } catch (error) {
+    stderr(`virtual cursor teardown failed: ${error?.message || error}`);
+  }
 }
 
 // Exit once stdout has actually drained, not after a fixed delay.
@@ -3510,6 +3728,14 @@ async function dispatchTool(name, args) {
         federation: federationStatus,
         childServerEnvAllowlist: federationStatus.childServerEnvAllowlist,
         personalBrowserApproved: await personalBrowserApprovalPresent(),
+        advancedBrowser: {
+          enabled: ADVANCED_BROWSER.enabled,
+          backend: "browser-harness-raw-cdp",
+          name: ADVANCED_BROWSER.name,
+          socketPath: ADVANCED_BROWSER.socketPath,
+          socket: advancedBrowserSocketStatus(ADVANCED_BROWSER),
+          isolation: "separate explicit opt-in backend; existing chrome_* managed workspace remains unchanged",
+        },
         backgroundChrome: {
           ...(await backgroundChromeStatus({ dataDir: APP_SUPPORT_DIR, timeoutMs: 750 })),
           grant: await backgroundChromeGrantStatus(),
@@ -3519,9 +3745,10 @@ async function dispatchTool(name, args) {
         desktopControl: {
           available: MAC_UI_AVAILABLE,
           helperPath: MAC_UI_HELPER,
-          protocolVersion: 2,
+          virtualCursor: { available: MAC_UI_CURSOR_AVAILABLE, helperPath: MAC_UI_CURSOR_HELPER },
+          protocolVersion: 3,
           model: "Accessibility/AXObserver semantic control with ScreenCaptureKit/Vision/CGEvent visual fallback",
-          features: ["observation-generations", "semantic-preconditions", "postcondition-waits", "display-window-region-capture", "vision-ocr", "visual-waits", "window-control", "drag-drop", "native-dialogs", "open-save-panels", "multi-display-routing"],
+          features: ["observation-generations", "semantic-preconditions", "postcondition-waits", "ax-hit-test", "targeted-ax-query", "batched-ax-reads", "enhanced-ax", "background-pid-input", "focus-preservation", "batched-ui-sequences", "virtual-ai-cursor", "display-window-region-capture", "vision-ocr", "visual-waits", "window-control", "drag-drop", "native-dialogs", "open-save-panels", "multi-display-routing"],
         },
         accessModel: "No bridge sandbox or path allowlist. Effective access equals the macOS account running tunnel-client/this server, subject to macOS TCC, Full Disk Access, ACLs, and sudo authentication.",
       };
@@ -3531,7 +3758,7 @@ async function dispatchTool(name, args) {
 
     case "ui_status": {
       const result = await callNativeUi("status", {}, { timeoutMs: 5_000 });
-      await audit(name, args, { accessibilityTrusted: result.accessibilityTrusted, screenRecordingGranted: result.screenRecordingGranted });
+      await audit(name, args, { accessibilityTrusted: result.accessibilityTrusted, screenRecordingGranted: result.screenRecordingGranted, postEventsGranted: result.postEventsGranted });
       return { ...result, helperPath: MAC_UI_HELPER };
     }
 
@@ -3564,8 +3791,79 @@ async function dispatchTool(name, args) {
       return result;
     }
 
+    case "ui_ax_at": {
+      const payload = {
+        ...(args?.pid === undefined ? {} : { pid: requireInteger(args, "pid", 1, 2_147_483_647) }),
+        x: args?.x, y: args?.y,
+        ...(args?.display_id === undefined ? {} : { display_id: requireInteger(args, "display_id", 0, 0xffffffff) }),
+        include_value: optionalBoolean(args, "include_value", true),
+      };
+      for (const key of ["x", "y"]) if (typeof payload[key] !== "number" || !Number.isFinite(payload[key])) throw new Error(`'${key}' must be a finite number`);
+      const result = await callNativeUi("ax_at", payload, { timeoutMs: 10_000 });
+      const observation = registerUiObservation(result);
+      Object.assign(result, observation);
+      await audit(name, args, { pid: result.pid, ref: result.ref, observationId: observation.observationId });
+      return result;
+    }
+
+    case "ui_ax_query": {
+      const payload = {
+        ...(args?.pid === undefined ? {} : { pid: requireInteger(args, "pid", 1, 2_147_483_647) }),
+        ...(args?.selector && typeof args.selector === "object" && !Array.isArray(args.selector) ? { selector: args.selector } : { selector: {} }),
+        visible_only: optionalBoolean(args, "visible_only", true),
+        limit: optionalInteger(args, "limit", 20, 1, 100),
+        direction: optionalString(args, "direction", "next"),
+        immediate_descendants_only: optionalBoolean(args, "immediate_descendants_only", false),
+        max_depth: optionalInteger(args, "max_depth", 12, 1, 20),
+        max_elements: optionalInteger(args, "max_elements", 2_000, 1, 10_000),
+        include_value: optionalBoolean(args, "include_value", true),
+      };
+      const result = await callNativeUi("ax_query", payload, { timeoutMs: 15_000 });
+      const observation = registerUiObservation(result);
+      Object.assign(result, observation);
+      await audit(name, args, { pid: result.pid, count: result.count, optimizedSearchUsed: result.optimizedSearchUsed, observationId: observation.observationId });
+      return result;
+    }
+
+    case "ui_cursor": {
+      const action = optionalString(args, "action", "status");
+      if (!MAC_UI_CURSOR_AVAILABLE && action !== "status") {
+        const error = new Error(`Virtual cursor helper is unavailable: ${MAC_UI_CURSOR_HELPER || "<unset>"}`);
+        error.code = "UI_CURSOR_HELPER_UNAVAILABLE";
+        throw error;
+      }
+      if (["move", "show"].includes(action)) {
+        if (typeof args?.x !== "number" || !Number.isFinite(args.x) || typeof args?.y !== "number" || !Number.isFinite(args.y)) throw new Error(`ui_cursor '${action}' requires finite x and y`);
+        virtualCursorState.x = args.x;
+        virtualCursorState.y = args.y;
+        virtualCursorState.displayId = args?.display_id === undefined ? null : requireInteger(args, "display_id", 0, 0xffffffff);
+        virtualCursorState.visible = true;
+        macUiCursor.send({ action, x: args.x, y: args.y, ...(virtualCursorState.displayId === null ? {} : { display_id: virtualCursorState.displayId }), duration_ms: optionalInteger(args, "duration_ms", 160, 0, 10_000) });
+      } else if (action === "hide") {
+        virtualCursorState.visible = false;
+        macUiCursor.send({ action: "hide" }, { start: false });
+      } else if (action === "click") {
+        if (!virtualCursorState.visible) throw new Error("ui_cursor click requires a visible virtual cursor; move/show it first");
+        macUiCursor.send({ action: "click" });
+      } else if (action !== "status") {
+        throw new Error("ui_cursor action must be status, move, show, hide, or click");
+      }
+      const result = {
+        available: MAC_UI_CURSOR_AVAILABLE,
+        helperPath: MAC_UI_CURSOR_HELPER,
+        helperRunning: macUiCursor.running,
+        visible: virtualCursorState.visible,
+        x: virtualCursorState.x,
+        y: virtualCursorState.y,
+        displayId: virtualCursorState.displayId,
+        physicalCursorMoved: false,
+      };
+      await audit(name, args, { action, available: result.available, visible: result.visible });
+      return result;
+    }
+
     case "ui_screenshot": {
-      const payload = uiCapturePayload(args);
+      const payload = uiCapturePayload(args, { includeVirtualCursor: true });
       const image = await callNativeUi("screenshot", payload, { timeoutMs: 25_000, maxBytes: 28_000_000 });
       const metadata = { mimeType: image.mimeType, width: image.width, height: image.height, target: image.target };
       await audit(name, args, metadata);
@@ -3594,7 +3892,7 @@ async function dispatchTool(name, args) {
         await audit(name, args, { pid: tree.pid, elementCount: tree.elementCount, screenshot: false, observationId: observation.observationId });
         return result;
       }
-      const imagePayload = uiCapturePayload(args, { defaultFormat: "jpeg", defaultQuality: 0.78 });
+      const imagePayload = uiCapturePayload(args, { defaultFormat: "jpeg", defaultQuality: 0.78, includeVirtualCursor: true });
       const image = await callNativeUi("screenshot", imagePayload, { timeoutMs: 25_000, maxBytes: 28_000_000 });
       const structured = {
         status,
@@ -3672,7 +3970,13 @@ async function dispatchTool(name, args) {
 
     case "ui_mouse": {
       const action = requireString(args, "action");
-      const payload = { action };
+      const payload = {
+        action,
+        ...(args?.pid === undefined ? {} : { pid: requireInteger(args, "pid", 1, 2_147_483_647) }),
+        input_mode: optionalString(args, "input_mode", "auto"),
+        preserve_focus: optionalBoolean(args, "preserve_focus", true),
+        activate_target: optionalBoolean(args, "activate_target", false),
+      };
       for (const key of ["x", "y", "to_x", "to_y", "delta_x", "delta_y"]) {
         if (args?.[key] !== undefined) {
           if (typeof args[key] !== "number" || !Number.isFinite(args[key])) throw new Error(`'${key}' must be a finite number`);
@@ -3684,9 +3988,11 @@ async function dispatchTool(name, args) {
       if (args?.duration_ms !== undefined) payload.duration_ms = requireInteger(args, "duration_ms", 0, 10_000);
       if (["move", "click", "double_click", "right_click", "drag"].includes(action) && (payload.x === undefined || payload.y === undefined)) throw new Error(`ui_mouse action '${action}' requires x and y`);
       if (action === "drag" && (payload.to_x === undefined || payload.to_y === undefined)) throw new Error("ui_mouse drag requires to_x and to_y");
+      if (payload.input_mode === "background" && !payload.pid) throw new Error("ui_mouse background input requires pid");
       await requireNativeUiApproval(name, payload);
-      const result = await callNativeUi("mouse", payload, { timeoutMs: 15_000 });
-      await audit(name, args, { action, performed: result.performed });
+      const initial = await callNativeUi("mouse", payload, { timeoutMs: 15_000 });
+      const result = await verifyUiInputWithFallback(name, "mouse", args, payload, initial);
+      await audit(name, args, { action, performed: result.performed, inputMode: result.inputMode, foregroundFallbackUsed: result.foregroundFallbackUsed ?? false, verified: result.verification?.matched ?? null });
       return result;
     }
 
@@ -3695,19 +4001,70 @@ async function dispatchTool(name, args) {
       const hasKey = typeof args?.key === "string";
       const hasCode = Number.isInteger(args?.key_code);
       if ([hasText, hasKey, hasCode].filter(Boolean).length !== 1) throw new Error("ui_keyboard requires exactly one of text, key, or key_code");
+      const common = {
+        ...(args?.pid === undefined ? {} : { pid: requireInteger(args, "pid", 1, 2_147_483_647) }),
+        input_mode: optionalString(args, "input_mode", "auto"),
+        preserve_focus: optionalBoolean(args, "preserve_focus", true),
+        activate_target: optionalBoolean(args, "activate_target", false),
+      };
       const payload = hasText
-        ? { text: requireString(args, "text", { allowEmpty: true }) }
+        ? { ...common, text: requireString(args, "text", { allowEmpty: true }) }
         : {
+            ...common,
             ...(hasKey ? { key: requireString(args, "key") } : { key_code: requireInteger(args, "key_code", 0, 255) }),
             modifiers: optionalStringArray(args, "modifiers", []),
             phase: optionalString(args, "phase", "press"),
             repeat: optionalInteger(args, "repeat", 1, 1, 100),
             delay_ms: optionalInteger(args, "delay_ms", 0, 0, 2_000),
           };
+      if (payload.input_mode === "background" && !payload.pid) throw new Error("ui_keyboard background input requires pid");
       if (typeof payload.text === "string" && payload.text.length > 500_000) throw new Error("'text' must be at most 500000 characters");
       await requireNativeUiApproval(name, payload);
-      const result = await callNativeUi("keyboard", payload, { timeoutMs: 15_000 });
-      await audit(name, args, { performed: result.performed, typedCharacters: result.typedCharacters, key: result.key, keyCode: result.keyCode });
+      const initial = await callNativeUi("keyboard", payload, { timeoutMs: 15_000 });
+      const result = await verifyUiInputWithFallback(name, "keyboard", args, payload, initial);
+      await audit(name, args, { performed: result.performed, typedCharacters: result.typedCharacters, key: result.key, keyCode: result.keyCode, inputMode: result.inputMode, foregroundFallbackUsed: result.foregroundFallbackUsed ?? false, verified: result.verification?.matched ?? null });
+      return result;
+    }
+
+    case "ui_sequence": {
+      if (!Array.isArray(args?.steps) || args.steps.length < 1 || args.steps.length > 64) throw new Error("ui_sequence requires 1..64 steps");
+      const allowed = new Set(["sleep", "ax_at", "ax_query", "tree", "action", "mouse", "keyboard", "wait_for", "assert", "window_action", "drag_drop", "dialogs", "dialog_action", "file_dialog", "app_activate", "clipboard_read", "clipboard_write", "screenshot", "ocr"]);
+      const steps = args.steps.map((step, index) => {
+        if (!step || typeof step !== "object" || Array.isArray(step)) throw new Error(`ui_sequence step ${index} must be an object`);
+        const op = requireString(step, "op");
+        if (!allowed.has(op)) throw new Error(`ui_sequence step ${index} has unsupported op '${op}'`);
+        if (step.args !== undefined && (!step.args || typeof step.args !== "object" || Array.isArray(step.args))) throw new Error(`ui_sequence step ${index}.args must be an object`);
+        let stepArgs = step.args ?? {};
+        if (op === "screenshot" && stepArgs.show_virtual_cursor !== false && virtualCursorState.visible && Number.isFinite(virtualCursorState.x) && Number.isFinite(virtualCursorState.y)) {
+          stepArgs = {
+            ...stepArgs,
+            virtual_cursor: {
+              x: virtualCursorState.x,
+              y: virtualCursorState.y,
+              visible: true,
+              ...(Number.isInteger(virtualCursorState.displayId) ? { display_id: virtualCursorState.displayId } : {}),
+            },
+          };
+        }
+        const refs = ["ref", "dialog_ref", "source_ref", "destination_ref"].map((key) => stepArgs[key]).filter((value) => typeof value === "string");
+        requireUiObservationRefs(typeof stepArgs.observation_id === "string" ? stepArgs.observation_id : null, refs);
+        return { op, args: stepArgs, require_match: step.require_match !== false };
+      });
+      await requireNativeUiApproval(name, { steps });
+      const result = await callNativeUi("sequence", { steps }, { timeoutMs: 120_000, maxBytes: 48_000_000 });
+      const observation = registerUiObservation(result);
+      Object.assign(result, observation);
+      let image = null;
+      for (let index = (result.results?.length ?? 0) - 1; index >= 0; index -= 1) {
+        const candidate = result.results[index]?.result;
+        if (candidate?.data && candidate?.mimeType) { image = candidate; break; }
+      }
+      await audit(name, args, { stepCount: result.stepCount, elapsedMs: result.elapsedMs, observationId: observation.observationId, returnedImage: Boolean(image) });
+      if (image) {
+        const structured = structuredClone(result);
+        for (const entry of structured.results ?? []) if (entry?.result?.data) delete entry.result.data;
+        return uiImageResult(image, structured);
+      }
       return result;
     }
 
@@ -3835,6 +4192,71 @@ async function dispatchTool(name, args) {
       const result = await callNativeUi("clipboard_write", { text }, { timeoutMs: 5_000 });
       await audit(name, args, { changeCount: result.changeCount, writtenCharacters: result.writtenCharacters });
       return result;
+    }
+
+    case "browser_cdp_status": {
+      const socket = advancedBrowserSocketStatus(ADVANCED_BROWSER);
+      const settings = await readOperatorSettings();
+      let connection = null;
+      let connectionError = null;
+      if (ADVANCED_BROWSER.enabled && !settings.strictApprovals && socket.exists && socket.isSocket && socket.ownedByCurrentUser !== false) {
+        try {
+          const ping = await advancedBrowserRequest({ meta: "ping" }, { config: ADVANCED_BROWSER, timeoutMs: 2_000, maxBytes: 1_000_000 });
+          const status = await advancedBrowserRequest({ meta: "connection_status" }, { config: ADVANCED_BROWSER, timeoutMs: 3_000, maxBytes: 1_000_000 });
+          connection = { ping, ...status };
+        } catch (error) {
+          connectionError = { code: error?.code || "ADVANCED_BROWSER_ERROR", message: error?.message || String(error) };
+        }
+      }
+      const result = {
+        enabled: ADVANCED_BROWSER.enabled,
+        strictBlocked: Boolean(settings.strictApprovals),
+        backend: "browser-harness-raw-cdp",
+        name: ADVANCED_BROWSER.name,
+        socketPath: ADVANCED_BROWSER.socketPath,
+        socket,
+        connection,
+        connectionError,
+        managedChromeUnchanged: true,
+      };
+      await audit(name, args, { enabled: result.enabled, strictBlocked: result.strictBlocked, socketExists: socket.exists, connected: Boolean(connection) });
+      return result;
+    }
+
+    case "browser_cdp_call": {
+      await requireAdvancedBrowserAccess(name);
+      const method = requireString(args, "method");
+      if (!/^[A-Za-z][A-Za-z0-9_]*\.[A-Za-z][A-Za-z0-9_]*$/.test(method)) throw new Error("'method' must be a CDP Domain.method name");
+      const params = args?.params === undefined ? {} : args.params;
+      if (!params || typeof params !== "object" || Array.isArray(params)) throw new Error("'params' must be an object");
+      const request = { method, params };
+      if (typeof args?.session_id === "string") request.session_id = requireString(args, "session_id");
+      const timeoutMs = optionalInteger(args, "timeout_ms", 8_000, 100, 120_000);
+      const response = await advancedBrowserRequest(request, { config: ADVANCED_BROWSER, timeoutMs });
+      const result = response.result ?? {};
+      await audit(name, args, { method, sessionId: request.session_id ?? null, ok: true, advancedBrowser: true });
+      return { result, _advancedBrowser: { backend: "browser-harness-raw-cdp", managedChromeUnchanged: true } };
+    }
+
+    case "browser_cdp_session": {
+      await requireAdvancedBrowserAccess(name);
+      const action = optionalString(args, "action", "current");
+      let request;
+      if (action === "current") request = { meta: "current_tab" };
+      else if (action === "session") request = { meta: "session" };
+      else if (action === "set") {
+        request = { meta: "set_session", target_id: requireString(args, "target_id"), session_id: requireString(args, "session_id") };
+      } else throw new Error("browser_cdp_session action must be current, session, or set");
+      const result = await advancedBrowserRequest(request, { config: ADVANCED_BROWSER, timeoutMs: 8_000, maxBytes: 2_000_000 });
+      await audit(name, args, { action, advancedBrowser: true });
+      return { ...result, _advancedBrowser: { backend: "browser-harness-raw-cdp", managedChromeUnchanged: true } };
+    }
+
+    case "browser_cdp_events": {
+      await requireAdvancedBrowserAccess(name);
+      const result = await advancedBrowserRequest({ meta: "drain_events" }, { config: ADVANCED_BROWSER, timeoutMs: 8_000, maxBytes: 16_000_000 });
+      await audit(name, {}, { eventCount: Array.isArray(result.events) ? result.events.length : 0, advancedBrowser: true });
+      return { ...result, _advancedBrowser: { backend: "browser-harness-raw-cdp", managedChromeUnchanged: true } };
     }
 
     case "chrome_workspace_status": {
