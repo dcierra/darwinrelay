@@ -153,9 +153,15 @@ job_owns_target() { # metadata-path, target ("-pgid" or "pid")
   fi
   [[ -n "${pid:-}" ]] || return 1
 
-  lstart="$(ps -o lstart= -p "$pid" 2>/dev/null || true)"
+  # `ps -o lstart` is locale-sensitive on macOS. Under ru_RU, for example, it
+  # returns `вторник, 18 августа ...`, while the fixed `%a %b %e ...` parser below
+  # expects English abbreviations. That made every recorded job look stale and
+  # caused the kill switch to skip real shell/pty/MCP process groups while still
+  # printing a successful final verdict. Force the producer and parser into the
+  # same stable C locale; this is process-local and does not change user settings.
+  lstart="$(LC_ALL=C ps -o lstart= -p "$pid" 2>/dev/null || true)"
   [[ -n "$lstart" ]] || return 1
-  proc_epoch="$(date -j -f '%a %b %e %H:%M:%S %Y' "$lstart" +%s 2>/dev/null || true)"
+  proc_epoch="$(LC_ALL=C date -j -f '%a %b %e %H:%M:%S %Y' "$lstart" +%s 2>/dev/null || true)"
   # Unparseable start time: fail closed on the signal, not on the report.
   [[ -n "$proc_epoch" ]] || return 1
   # 5s slack for clock granularity between the two sources.

@@ -16,6 +16,11 @@ NAME="MacDevBridge"
 
 command -v swiftc >/dev/null || { echo "swiftc not found. Install the Xcode Command Line Tools: xcode-select --install" >&2; exit 69; }
 
+# Build the optional native desktop-control helper into the package. The running
+# production app is not involved; bridge.mjs resolves this helper from bin/.
+MAC_DEV_BRIDGE_UI_HELPER_OUTPUT="$PACKAGE_DIR/bin/MacUIHelper" "$PACKAGE_DIR/scripts/build-mac-ui-helper.sh" >/dev/null
+echo "  built native desktop-control helper"
+
 echo "Building $NAME..."
 
 # Quit a running instance FIRST. Deleting a live bundle leaves the old process
@@ -41,8 +46,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>$NAME</string>
   <key>CFBundleDisplayName</key><string>Mac Developer Bridge</string>
   <key>CFBundleIdentifier</key><string>local.mac-developer-bridge.menubar</string>
-  <key>CFBundleVersion</key><string>0.2.0</string>
-  <key>CFBundleShortVersionString</key><string>0.2.0</string>
+  <key>CFBundleVersion</key><string>0.3.0</string>
+  <key>CFBundleShortVersionString</key><string>0.3.0</string>
   <key>CFBundleExecutable</key><string>$NAME</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
@@ -62,6 +67,8 @@ PLIST
 swiftc -O \
   -target "$(uname -m)-apple-macos13.0" \
   -framework AppKit \
+  -framework ApplicationServices \
+  -framework CoreGraphics \
   -o "$APP/Contents/MacOS/$NAME" \
   "$HERE/MenuBarApp.swift"
 

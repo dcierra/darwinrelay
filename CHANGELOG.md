@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Native desktop computer control (private line)
+
+- Added a Swift `MacUIHelper` and built-in `ui_*` tools for native macOS status, application/window discovery, Accessibility trees, ScreenCaptureKit screenshots, combined observations, semantic AX actions, application launch/activation, CoreGraphics mouse/keyboard input, and clipboard access.
+- Returned screenshots as native MCP image content instead of forcing image bytes through a text response. `ui_observe` combines the AX tree and visual frame so the model can use semantic controls first and pixel coordinates only as a fallback.
+- Made desktop control optional and fail-soft for existing users: the helper is advertised only when its executable exists, `install.sh` attempts an independent native build, and a failed/missing helper leaves the existing shell/filesystem/PTY/browser surface intact.
+- Kept P0 helper lifecycle short-lived. Every UI call spawns one bounded helper process; bridge revocation and normal teardown track and reclaim it through the existing in-flight process-group path.
+- Added fingerprinted AX refs (`ax:<pid>:<path>:<fingerprint>`). `ui_action` re-resolves the element and verifies role/subrole/identifier/title/description/frame identity before mutation, returning `UI_ELEMENT_STALE` if the UI changed.
+- Extended Strict approvals to dedicated native mutation tools while preserving relaxed mode as the default unrestricted-operator behavior.
+- Added unconditional audit redaction for `ui_keyboard.text`, `ui_clipboard_write.text`, and AX `set_value` payloads, including full audit mode.
+- Added an isolated desktop-control protocol test covering tool advertisement, image-content passthrough, Strict approval consumption, and audit redaction, plus Swift typecheck/build checks and real read-only AX/screenshot validation on macOS.
+- Fixed a pre-existing kill-switch containment bug on non-English macOS locales. `ps -o lstart` returned localized dates (for example under `ru_RU.UTF-8`) while `disable.sh` parsed an English-only format, causing live recorded job groups to be misclassified as stale and skipped. Process start-time production/parsing now runs under `LC_ALL=C`; the upstream federation containment test passes under the affected locale.
+- Preserved the local Cloudflare quick-tunnel workaround by passing `--protocol http2` in the private menu-bar build line.
+- Added menu-bar desktop permission status for Accessibility, Screen Recording, and Full Disk Access, plus an entry that opens macOS Privacy & Security. The menu code is syntax/type-checked in CI; it does not alter TCC permissions.
+
 ### Background Chrome without focus stealing
 
 - Routed the legacy low-level `tabs.open` primitive through `workspace.open` at the client, native-host, and extension layers. Older/stale sessions can no longer create loose Chrome tabs outside `MDB`; if the workspace is missing they fail closed until the group is auto-healed. The extension now recreates the default four-tab workspace whenever Chrome is naturally focused, avoiding manual re-setup after browser/extension restarts.
