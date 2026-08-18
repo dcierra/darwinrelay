@@ -183,33 +183,9 @@ try {
   const visual = structured(await visualPromise);
   assert.equal(visual.matched, true);
 
-  observed = structured(await request("ui_tree", { pid: fixturePid, max_depth: 8, max_elements: 700 }));
-  const slider = byIdentifier(observed, "fixture.slider");
-  const sliderFrame = slider.frame;
-  // A generic AX element ref resolves to the element center, which is not the
-  // slider thumb when its value is 25%. Exercise coordinate drag against the
-  // actual thumb position instead of relying on an AppKit hit-test coincidence.
-  const dragResult = structured(await request("ui_drag_drop", {
-    from_x: sliderFrame.x + sliderFrame.width * 0.25,
-    from_y: sliderFrame.y + sliderFrame.height / 2,
-    to_x: sliderFrame.x + sliderFrame.width - 15,
-    to_y: sliderFrame.y + sliderFrame.height / 2,
-    duration_ms: 350,
-  }));
-  assert.equal(dragResult.performed, true);
-  assert.ok(dragResult.to.x > dragResult.from.x, "drag should route from left to right");
-  const afterDrag = structured(await request("ui_tree", { pid: fixturePid, max_depth: 8, max_elements: 700 }));
-  const sliderAfter = byIdentifier(afterDrag, "fixture.slider");
-  // GitHub's hosted macOS desktop can expose Accessibility/ScreenCaptureKit while
-  // still not dispatching CGEvent pointer input into AppKit controls. Require the
-  // visible state mutation on an interactive Mac, and keep CI responsible for the
-  // bridge/helper event contract and coordinate routing.
-  if (!process.env.CI) {
-    assert.notEqual(sliderAfter.value, "25", "drag should change the fixture slider value on an interactive desktop");
-  }
-
-  const fileButton = byIdentifier(afterDrag, "fixture.open_file");
-  structured(await request("ui_action", { observation_id: afterDrag.observationId, ref: fileButton.ref, action: "press" }));
+  const fileTree = structured(await request("ui_tree", { pid: fixturePid, max_depth: 8, max_elements: 700 }));
+  const fileButton = byIdentifier(fileTree, "fixture.open_file");
+  structured(await request("ui_action", { observation_id: fileTree.observationId, ref: fileButton.ref, action: "press" }));
   assert.equal(structured(await request("ui_wait_for", { pid: fixturePid, selector: { role: "AXSheet" }, condition: "exists", timeout_ms: 2000 })).matched, true);
   // Verify the picker helper against a real NSOpenPanel without selecting user data.
   const samplePath = path.join(tempRoot, "picker-sample.txt");
@@ -224,6 +200,28 @@ try {
   const savePath = path.join(tempRoot, "saved-by-fixture.txt");
   structured(await request("ui_file_dialog", { pid: fixturePid, path: savePath, mode: "save", confirm: true }));
   assert.equal(structured(await request("ui_wait_for", { pid: fixturePid, selector: { identifier: "fixture.status" }, condition: "value_contains", expected: "saved-by-fixture.txt", timeout_ms: 3000 })).matched, true);
+
+  // Keep synthetic pointer input last. Hosted macOS runners may expose AX and
+  // ScreenCaptureKit while not dispatching CGEvent pointer input into AppKit; when
+  // that happens, a drag can also make later AX actions transiently fail. Local
+  // interactive runs additionally require the slider's visible state to change.
+  const dragTree = structured(await request("ui_tree", { pid: fixturePid, max_depth: 8, max_elements: 700 }));
+  const slider = byIdentifier(dragTree, "fixture.slider");
+  const sliderFrame = slider.frame;
+  const dragResult = structured(await request("ui_drag_drop", {
+    from_x: sliderFrame.x + sliderFrame.width * 0.25,
+    from_y: sliderFrame.y + sliderFrame.height / 2,
+    to_x: sliderFrame.x + sliderFrame.width - 15,
+    to_y: sliderFrame.y + sliderFrame.height / 2,
+    duration_ms: 350,
+  }));
+  assert.equal(dragResult.performed, true);
+  assert.ok(dragResult.to.x > dragResult.from.x, "drag should route from left to right");
+  if (!process.env.CI) {
+    const afterDrag = structured(await request("ui_tree", { pid: fixturePid, max_depth: 8, max_elements: 700 }));
+    const sliderAfter = byIdentifier(afterDrag, "fixture.slider");
+    assert.notEqual(sliderAfter.value, "25", "drag should change the fixture slider value on an interactive desktop");
+  }
 
   console.log("desktop-control-native: ok");
 } finally {
