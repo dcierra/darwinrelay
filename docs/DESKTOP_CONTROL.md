@@ -16,13 +16,15 @@ bridge.mjs
         |
         | bounded JSON stdin/stdout; one helper process per call
         v
-      MacUIHelper (Swift)
+      MacUIHelper (Swift, short-lived per burst)
         |-- AppKit / NSWorkspace
         |-- Accessibility / AXObserver
         |-- ScreenCaptureKit
         |-- CoreGraphics / CGEvent
         |-- Vision OCR
         `-- NSPasteboard
+
+bridge.mjs -- optional persistent, click-through --> MacUICursorOverlay
 ```
 
 The Mac side is deterministic execution/observation infrastructure; reasoning remains in the ChatGPT-side agent. Semantic Accessibility operations are preferred over visual coordinates, with screenshots/OCR/input as fallbacks for canvas, RDP and custom-rendered surfaces.
@@ -43,19 +45,23 @@ For visual-only UI:
 
 ```text
 ui_screenshot / ui_ocr
-  -> ui_mouse / ui_drag_drop / ui_keyboard
+  -> ui_ax_at(coordinate) when AX can identify the visual target
+  -> otherwise ui_mouse / ui_drag_drop / ui_keyboard
   -> ui_wait_visual
   -> screenshot/OCR verification
 ```
 
 ## Observation and synchronization
 
-- `ui_status` — Accessibility/Screen Recording state, frontmost app and canonical display geometry.
+- `ui_status` — Accessibility/Screen Recording/event-post state, frontmost app and canonical display geometry.
 - `ui_app_list` — running application metadata.
 - `ui_window_list` — CoreGraphics windows, global bounds and display routing.
-- `ui_tree` — bounded Accessibility hierarchy and fingerprinted refs.
+- `ui_tree` — bounded Accessibility hierarchy and fingerprinted refs. Attribute reads are batched with `AXUIElementCopyMultipleAttributeValues` when supported.
+- `ui_ax_query` — targeted semantic search using `AXUIElementsForSearchPredicate` when available, with a bounded tree fallback.
+- `ui_ax_at` — `AXUIElementCopyElementAtPosition` hit-test that converts a visual coordinate into a stable fingerprinted ref.
 - `ui_screenshot` — ScreenCaptureKit display/window/region capture as native MCP image content.
 - `ui_observe` — status + AX tree + optional display/window/region screenshot.
+- `ui_cursor` — independent click-through AI cursor; it is visual state only and never moves the physical system cursor.
 - `ui_wait_for` — AXObserver-assisted bounded wait with polling fallback.
 - `ui_assert` — immediate semantic state assertion.
 - `ui_ocr` — Apple Vision OCR over a display/window/region, with text confidence and pixel bounds.
@@ -74,6 +80,19 @@ ui_screenshot / ui_ocr
 - `ui_dialogs`, `ui_dialog_action` — semantic native sheet/dialog discovery and button actions.
 - `ui_file_dialog` — deterministic open/save panel path navigation using the standard Go-to-Folder UI plus Accessibility semantics.
 - `ui_clipboard_read`, `ui_clipboard_write`.
+- `ui_sequence` — up to 64 bounded deterministic native primitives in one helper process; `wait_for` steps fail the burst by default when their postcondition does not match.
+
+## Background-targeted input and focus preservation
+
+`ui_mouse` and `ui_keyboard` have three delivery modes:
+
+- `foreground` — the compatibility path, posting through the global HID event tap; the caller may explicitly activate the target.
+- `background` — requires a target pid and posts CoreGraphics events directly to that process. The physical mouse is not warped and `preserve_focus=true` fails with `UI_FOCUS_CHANGED` if the target unexpectedly becomes frontmost. This mode never activates the target automatically.
+- `auto` — uses background delivery when a pid is supplied, otherwise foreground delivery. If the caller also supplied a semantic `verify` clause and the background attempt fails that postcondition, MDB may perform **one** foreground retry (`activate_target=true`) unless `allow_foreground_fallback=false`. No `verify` means no automatic fallback.
+
+PID-targeted event APIs are best-effort: native applications are free to reject synthetic events without returning an actionable failure. Therefore a reported event-post success is not treated as proof that the UI changed; use semantic postconditions for consequential input. `ui_status.postEventsGranted` and the menu-bar `Input` indicator expose the separate CoreGraphics event-post permission.
+
+`AXEnhancedUserInterface` is enabled best-effort on application roots to improve the exposed tree for applications that support it; unsupported applications simply retain their normal AX behavior.
 
 ## AX target safety
 
@@ -110,7 +129,7 @@ For `ui_mouse`, `ui_drag_drop`, and region screenshots, a display id can make co
 
 Display and desktop-independent window screenshots use ScreenCaptureKit. Region capture uses the native cross-display screenshot API on macOS 15.2+ and a fail-closed single-display fallback on older supported releases.
 
-Screenshot content is returned as MCP `image` blocks; base64 bytes are not duplicated into structured metadata or the audit log. JPEG is the bounded default, PNG is available for lossless inspection.
+Screenshot content is returned as MCP `image` blocks; base64 bytes are not duplicated into structured metadata or the audit log. When the MDB virtual cursor is visible, `ui_screenshot`/`ui_observe` render that independent cursor into the returned frame by default (`show_virtual_cursor=false` disables it) without moving or capturing the operator's physical pointer. JPEG is the bounded default, PNG is available for lossless inspection.
 
 `ui_ocr` uses `VNRecognizeTextRequest` locally. It returns recognized strings, confidence, normalized Vision bounds and top-left-origin pixel bounds in the returned image. Automatic language detection is the default and explicit recognition languages are supported.
 
@@ -135,17 +154,18 @@ Custom application-specific file browsers remain ordinary UI and should be handl
 
 The helper remains short-lived rather than becoming a resident daemon. On the development M4 host, 20 `status` launches measured a **50.46 ms median** and **55.75 ms p95 excluding the one cold 313.78 ms outlier**. That startup cost is small relative to ScreenCaptureKit, Vision and model/tool round trips, while one-process-per-call gives simpler revocation and failure isolation.
 
-Every helper process is detached into its own reclaimable group, tracked in the bridge's in-flight set, given a minimal environment allowlist and killed on bridge revocation/teardown. A resident helper is therefore intentionally not part of this release.
+Every `MacUIHelper` process is detached into its own reclaimable group, tracked in the bridge's in-flight set, given a minimal environment allowlist and killed on bridge revocation/teardown. A resident privileged helper is therefore intentionally not part of this release. The optional `MacUICursorOverlay` is different: it is an unprivileged, click-through visual process kept alive only to animate the independent AI cursor; bridge teardown/kill-switch paths reclaim it, and it never posts input events.
 
 ## Permissions
 
 The helper observes but never modifies TCC:
 
-- Accessibility is required for AX observation and synthesized input.
+- Accessibility is required for AX observation/actions.
 - Screen Recording is required for ScreenCaptureKit pixels/OCR/visual waits.
+- CoreGraphics event-post permission is checked separately before synthetic mouse/keyboard input.
 - Full Disk Access affects protected filesystem authority and is displayed separately in the menu-bar app.
 
-The menu-bar app shows `AX`, `Screen` and `FDA` status and links to macOS Privacy & Security. Login/lock screens, Secure Input, passkeys, authorization dialogs and other security-sensitive OS surfaces remain subject to macOS restrictions.
+The menu-bar app shows `AX`, `Screen`, `Input` and `FDA` status and links to macOS Privacy & Security. `scripts/desktop-doctor.sh` performs the same three native preflight checks without prompting or editing TCC; `--open` only opens Privacy & Security. Full Disk Access remains a separate `scripts/tcc-doctor.sh` check because TCC attribution depends on the responsible runtime process chain. Login/lock screens, Secure Input, passkeys, authorization dialogs and other security-sensitive OS surfaces remain subject to macOS restrictions.
 
 ## Approval and audit model
 
@@ -157,6 +177,8 @@ Sensitive input is always replaced before audit serialization, including full au
 - `ui_keyboard.text`
 - `ui_clipboard_write.text`
 - `ui_action.value` for `set_value`
+- the corresponding nested sensitive fields inside `ui_sequence`
+- raw `browser_cdp_call.params` (the whole parameter object)
 
 Observation itself is privileged: screenshots, OCR, clipboard reads and ordinary AX values can contain sensitive user-visible data.
 
@@ -166,11 +188,14 @@ Normal web work should still use the signed-in `chrome_*` MDB workspace because 
 
 The native `ui_*` surface is deliberately capable of foreground browser/OS interaction when a background extension cannot own the surface, such as native panels or visual-only controls.
 
+An optional Browser Harness-compatible raw-CDP adapter is available only when `MAC_DEV_BRIDGE_ADVANCED_BROWSER=1` was set before bridge startup. It talks to an already-running same-user Browser Harness daemon over its Unix socket and exposes raw CDP/session/events as `browser_cdp_*`; it neither installs Browser Harness nor executes arbitrary Python. This backend is independent of the managed `chrome_*` workspace and is blocked entirely while Strict approvals is enabled because arbitrary CDP cannot be reliably reduced to URL-pattern grants.
+
 ## Validation
 
 The desktop layer has two test tiers:
 
-1. deterministic protocol tests with a fake helper — tool advertisement, native image passthrough, observation binding, Strict approvals and audit redaction;
-2. a real AppKit fixture — semantic set/press + postconditions, AX waits/assertions, ScreenCaptureKit window capture, Vision OCR, window geometry changes, native dialogs, visual-change waits, drag/drop, NSOpenPanel and NSSavePanel.
+1. deterministic protocol tests with a fake helper — tool advertisement, image passthrough, AX hit/query refs, observation binding, background-input verification/fallback, virtual-cursor state, `ui_sequence`, Strict approvals and audit redaction;
+2. a raw-CDP IPC fixture — Browser Harness-compatible socket framing, raw calls/session/events and fail-closed Strict-mode blocking;
+3. a real AppKit fixture — semantic set/press + postconditions, targeted AX query/hit-test, sequence bursts, ScreenCaptureKit window capture with virtual cursor metadata, Vision OCR, window geometry changes, native dialogs, visual-change waits, PID-targeted input mode, drag/drop, NSOpenPanel and NSSavePanel.
 
 The native fixture test builds everywhere on macOS. GitHub-hosted macOS is deliberately treated as a compile-only environment for the mutable native fixture because runner images can report Accessibility/Screen Recording while still failing `AXPress`/`CGEvent` delivery nondeterministically. The deterministic `desktop-control.mjs` suite exercises the complete MCP desktop surface in hosted CI; the real mutable AppKit E2E runs on an interactive Mac, or on self-hosted CI when `MDB_RUN_NATIVE_DESKTOP_E2E=1` is explicitly set. If an interactive run lacks Accessibility/Screen Recording, it reports that permission boundary and skips after the successful build.

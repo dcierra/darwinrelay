@@ -16,6 +16,7 @@ const root = path.resolve(here, "..");
 const bridgePath = path.join(root, "bridge.mjs");
 const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mdb-desktop-native-"));
 const helperPath = path.join(tempRoot, "MacUIHelper");
+const cursorPath = path.join(tempRoot, "MacUICursorOverlay");
 const fixtureApp = path.join(tempRoot, "MDBDesktopFixture.app");
 const fixtureExe = path.join(fixtureApp, "Contents", "MacOS", "MDBDesktopFixture");
 const dataDir = path.join(tempRoot, "data");
@@ -30,6 +31,7 @@ function run(command, args, env = {}) {
 }
 
 run("bash", ["scripts/build-mac-ui-helper.sh"], { MAC_DEV_BRIDGE_UI_HELPER_OUTPUT: helperPath });
+run("bash", ["scripts/build-mac-ui-cursor.sh"], { MAC_DEV_BRIDGE_UI_CURSOR_OUTPUT: cursorPath });
 run("bash", ["scripts/build-desktop-fixture.sh"], { MDB_DESKTOP_FIXTURE_APP: fixtureApp });
 
 // GitHub-hosted macOS is not an interactive desktop contract. Depending on the
@@ -97,6 +99,7 @@ const bridge = spawn(process.execPath, [bridgePath], {
     MAC_DEV_BRIDGE_LOG_DIR: logDir,
     MAC_DEV_BRIDGE_AUDIT_MODE: "metadata",
     MAC_DEV_BRIDGE_UI_HELPER: helperPath,
+    MAC_DEV_BRIDGE_UI_CURSOR_HELPER: cursorPath,
     MAC_DEV_BRIDGE_FULL_ACCESS_ACK: "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS",
   },
 });
@@ -148,6 +151,22 @@ try {
   let input = byIdentifier(tree, "fixture.input");
   let increment = byIdentifier(tree, "fixture.increment");
 
+  const queriedIncrement = structured(await request("ui_ax_query", { pid: fixturePid, selector: { identifier: "fixture.increment", role: "AXButton" }, limit: 5 }));
+  assert.equal(queriedIncrement.count, 1);
+  assert.equal(queriedIncrement.elements[0].identifier, "fixture.increment");
+  assert.match(queriedIncrement.observationId, /^uiobs_/);
+  const incrementCenter = { x: increment.frame.x + increment.frame.width / 2, y: increment.frame.y + increment.frame.height / 2 };
+  const hit = structured(await request("ui_ax_at", { pid: fixturePid, x: incrementCenter.x, y: incrementCenter.y }));
+  assert.ok(hit.ref?.startsWith(`ax:${fixturePid}:`), "AX hit-test should return an addressable ref");
+  assert.ok(hit.frame, "AX hit-test should return semantic geometry");
+
+  const virtualCursor = structured(await request("ui_cursor", { action: "move", x: incrementCenter.x, y: incrementCenter.y, duration_ms: 0 }));
+  assert.equal(virtualCursor.visible, true);
+  assert.equal(virtualCursor.physicalCursorMoved, false);
+  const cursorShot = structured(await request("ui_screenshot", { target: "window", window_id: fixtureWindow.windowId, format: "png" }));
+  assert.equal(cursorShot.target.virtualCursor.x, incrementCenter.x);
+  assert.equal(cursorShot.target.virtualCursor.y, incrementCenter.y);
+
   const setValue = structured(await request("ui_action", {
     observation_id: observed.observationId,
     ref: input.ref,
@@ -158,6 +177,18 @@ try {
   }));
   assert.equal(setValue.verification.matched, true);
 
+  // Exercise actual CoreGraphics keyboard delivery, not only protocol wiring.
+  const keyboardTree = structured(await request("ui_tree", { pid: fixturePid, max_depth: 8, max_elements: 700 }));
+  const keyboardInput = byIdentifier(keyboardTree, "fixture.input");
+  structured(await request("ui_action", { observation_id: keyboardTree.observationId, ref: keyboardInput.ref, action: "set_value", value: "" }));
+  structured(await request("ui_action", { ref: keyboardInput.ref, action: "focus" }));
+  const keyboardTyped = structured(await request("ui_keyboard", {
+    pid: fixturePid, input_mode: "foreground", activate_target: true, text: "typed-by-keyboard",
+    verify: { pid: fixturePid, selector: { identifier: "fixture.input" }, condition: "value_equals", expected: "typed-by-keyboard", timeout_ms: 1500 },
+  }));
+  assert.equal(keyboardTyped.verification.matched, true);
+  assert.equal(keyboardTyped.typedCharacters, "typed-by-keyboard".length);
+
   const incremented = structured(await request("ui_action", {
     observation_id: observed.observationId,
     ref: increment.ref,
@@ -167,6 +198,18 @@ try {
   }));
   assert.equal(incremented.verification.matched, true);
   assert.equal(structured(await request("ui_assert", { pid: fixturePid, selector: { identifier: "fixture.counter" }, condition: "value_equals", expected: "Counter: 1" })).matched, true);
+
+  const sequenceQuery = structured(await request("ui_ax_query", { pid: fixturePid, selector: { identifier: "fixture.increment" }, limit: 1 }));
+  const sequence = structured(await request("ui_sequence", { steps: [
+    { op: "action", args: { observation_id: sequenceQuery.observationId, ref: sequenceQuery.elements[0].ref, action: "press" } },
+    { op: "wait_for", args: { pid: fixturePid, selector: { identifier: "fixture.counter" }, condition: "value_equals", expected: "Counter: 2", timeout_ms: 1500 } },
+  ] }));
+  assert.equal(sequence.stepCount, 2);
+  assert.equal(sequence.results[1].result.matched, true);
+
+  const backgroundMove = structured(await request("ui_mouse", { pid: fixturePid, input_mode: "background", preserve_focus: true, action: "move", x: incrementCenter.x, y: incrementCenter.y }));
+  assert.equal(backgroundMove.inputMode, "background");
+  assert.equal(backgroundMove.targetPid, fixturePid);
 
   const ocr = structured(await request("ui_ocr", { target: "window", window_id: fixtureWindow.windowId, recognition_level: "accurate" }, 60_000));
   assert.ok(ocr.blockCount > 0);
@@ -234,7 +277,8 @@ try {
 
   console.log("desktop-control-native: ok");
 } finally {
-  bridge.kill("SIGKILL");
+  bridge.kill("SIGTERM");
+  await new Promise((resolve) => { if (bridge.exitCode !== null) resolve(); else bridge.once("close", resolve); });
   rl.close();
   try { process.kill(-fixturePid, "SIGKILL"); } catch {}
   try { process.kill(fixturePid, "SIGKILL"); } catch {}

@@ -79,6 +79,9 @@ Mac Developer Bridge is released under the [MIT License](LICENSE). Bug reports a
 - Paginated Codex turn retrieval for histories too large for a single response
 - Native macOS desktop observation through Accessibility/AXObserver plus display, window, and region ScreenCaptureKit screenshots
 - Semantic AX actions with observation binding, preconditions and bounded post-action verification
+- Targeted AX query and coordinate hit-testing, plus batched Accessibility reads and Enhanced User Interface support for complex apps
+- PID-targeted background mouse/keyboard input with focus preservation, verified foreground fallback, and an independent virtual AI cursor
+- Bounded `ui_sequence` bursts that execute deterministic multi-step native workflows in one helper process
 - Native window management, drag/drop, rich keyboard input, dialog/open-save-panel handling, Vision OCR and visual-change waits
 - Canonical multi-display Quartz coordinates and native screenshot results returned as MCP image content rather than base64 text blobs
 - Short-lived native helper processes rather than a resident desktop-control daemon
@@ -95,12 +98,16 @@ Git, package managers, Vercel CLI, database CLIs, AppleScript, browser CLIs, bui
 | Tool | Purpose |
 |---|---|
 | `bridge_status` | Runtime identity, paths, permissions context, shell, audit mode, Codex binary, focus policy, and background-Chrome status |
-| `ui_status` | Inspect Accessibility/Screen Recording readiness and canonical display geometry |
+| `ui_status` | Inspect Accessibility/Screen Recording/input-event readiness and canonical display geometry |
 | `ui_app_list` | List running macOS applications |
 | `ui_window_list` | List CoreGraphics windows, bounds, and display routing |
 | `ui_tree` | Read a bounded AX tree with fingerprinted refs and an expiring observation id |
+| `ui_ax_at` | Resolve a screenshot/Quartz coordinate back to an actionable fingerprinted AX ref |
+| `ui_ax_query` | Search AX elements directly with optimized predicates and bounded fallback traversal |
+| `ui_cursor` | Move/show/hide an independent click-through AI cursor without moving the physical mouse |
 | `ui_screenshot` | Capture a display, window, or region as native MCP image content |
 | `ui_observe` | Return status + AX tree + optional targeted screenshot |
+| `ui_sequence` | Execute a bounded deterministic UI burst in one native-helper process |
 | `ui_wait_for` | Wait for semantic AX state with AXObserver-assisted bounded polling |
 | `ui_assert` | Assert semantic AX state immediately |
 | `ui_ocr` | Run Apple Vision OCR over a display/window/region |
@@ -109,14 +116,18 @@ Git, package managers, Vercel CLI, database CLIs, AppleScript, browser CLIs, bui
 | `ui_app_activate` | Bring a running application to the foreground |
 | `ui_action` | Perform semantic AX actions with optional precondition and postcondition verification |
 | `ui_window_action` | Focus/move/resize/minimize/restore/full-screen/close a native window |
-| `ui_mouse` | Move/click/right-click/double-click/scroll/drag using Quartz coordinates |
+| `ui_mouse` | Mouse input with foreground or PID-targeted background delivery, focus guards and optional verified fallback |
 | `ui_drag_drop` | Drag between semantic refs or explicit coordinates |
-| `ui_keyboard` | Type Unicode or send named/raw virtual keys, modifiers and key phases |
+| `ui_keyboard` | Unicode/named/raw-key input with foreground or PID-targeted background delivery and optional verified fallback |
 | `ui_dialogs` | Inspect native sheets/system dialogs and buttons |
 | `ui_dialog_action` | Press default/cancel/named native dialog buttons |
 | `ui_file_dialog` | Navigate and confirm standard native open/save panels by absolute path |
 | `ui_clipboard_read` | Read the general pasteboard string/types |
 | `ui_clipboard_write` | Replace the general pasteboard with text |
+| `browser_cdp_status` | Inspect the explicit opt-in Browser Harness raw-CDP backend |
+| `browser_cdp_call` | Call one raw CDP `Domain.method` through Browser Harness (disabled by default; blocked in Strict mode) |
+| `browser_cdp_session` | Inspect/select the Browser Harness target/session |
+| `browser_cdp_events` | Drain Browser Harness CDP events |
 | `chrome_workspace_status` | Inspect the extension-owned `MDB` Chrome group and reusable background-tab pool; no website grant required |
 | `chrome_workspace_setup` | Create or expand the `MDB` pool once while Chrome is already foreground |
 | `chrome_tabs` | List tabs in the real signed-in Chrome profile without activating Chrome; scoped only when Strict approvals is on |
@@ -146,7 +157,9 @@ Git, package managers, Vercel CLI, database CLIs, AppleScript, browser CLIs, bui
 
 The private line builds `MacUIHelper` from Swift sources under `desktop-helper/`. The helper is a bounded **short-lived process per tool call** using AppKit, Accessibility/AXObserver, ScreenCaptureKit, CoreGraphics, Vision and NSPasteboard. It is advertised only on macOS when the executable is available; a failed helper build leaves the original shell/filesystem/PTY/browser bridge usable.
 
-The preferred workflow is semantic-first: `ui_observe`/`ui_tree` → fingerprinted AX ref → `ui_action(precondition=..., verify=...)` → `ui_wait_for`/`ui_assert`. Each observation carries a short-lived in-memory `observationId`; callers can bind consequential actions to refs that were actually present in that observation. If AppKit only re-indexes child arrays, the helper can recover a ref by finding exactly one unchanged fingerprint; changed, missing, or ambiguous targets fail as `UI_ELEMENT_STALE`. Mismatched semantic preconditions fail as `UI_PRECONDITION_FAILED`, and failed postconditions as `UI_POSTCONDITION_FAILED`.
+The preferred workflow is semantic-first: `ui_observe`/`ui_tree` or targeted `ui_ax_query` → fingerprinted AX ref → `ui_action(precondition=..., verify=...)` → `ui_wait_for`/`ui_assert`. If vision/OCR identifies only a coordinate, `ui_ax_at` hit-tests that point back into an actionable AX ref before falling back to raw input. Each observation carries a short-lived in-memory `observationId`; callers can bind consequential actions to refs that were actually present in that observation. If AppKit only re-indexes child arrays, the helper can recover a ref by finding exactly one unchanged fingerprint; changed, missing, or ambiguous targets fail as `UI_ELEMENT_STALE`. Mismatched semantic preconditions fail as `UI_PRECONDITION_FAILED`, and failed postconditions as `UI_POSTCONDITION_FAILED`.
+
+`ui_mouse` and `ui_keyboard` accept `input_mode=auto|background|foreground`. With a target `pid`, `auto` tries PID-targeted CoreGraphics delivery first so the physical cursor and foreground app can remain untouched. Because some applications silently reject background events, foreground fallback occurs only when the caller supplied a semantic `verify` postcondition, that background attempt failed verification, and fallback was not disabled. Explicit `background` mode never activates the target automatically. `ui_sequence` groups deterministic steps into one bounded helper process to reduce MCP round trips and UI races.
 
 For poor-Accessibility surfaces such as RDP/canvas/custom renderers, use targeted `ui_screenshot` or local `ui_ocr`, then `ui_mouse`/`ui_drag_drop`/`ui_keyboard`, followed by `ui_wait_visual` or a new observation. Screenshots can target a display, desktop-independent window, or region. Pointer/region coordinates use Quartz global display space; explicit display ids allow display-local coordinates on multi-monitor setups.
 
@@ -157,10 +170,13 @@ Build/check the native pieces without installing the menu-bar app:
 ```bash
 ./scripts/build-mac-ui-helper.sh
 ./scripts/check-mac-ui-helper.sh
+./scripts/build-mac-ui-cursor.sh
+./scripts/check-mac-ui-cursor.sh
 ./scripts/build-desktop-fixture.sh
+./scripts/desktop-doctor.sh
 ```
 
-macOS TCC remains authoritative. The helper never edits TCC; Accessibility and Screen Recording are required for their respective capabilities. The menu-bar app displays AX/Screen/FDA readiness. Text supplied to `ui_keyboard`, `ui_clipboard_write`, and AX `set_value` is never written verbatim to the MDB audit log.
+macOS TCC remains authoritative. The helper never edits TCC; Accessibility, Screen Recording and permission to post synthetic input events are checked independently. The menu-bar app displays AX/Screen/Input/FDA readiness. Text supplied to `ui_keyboard`, `ui_clipboard_write`, and AX `set_value` is never written verbatim to the MDB audit log.
 
 The helper intentionally remains short-lived: measured startup on the development M4 host was ~50 ms median / ~56 ms p95 after warmup, so a resident daemon would add lifecycle and kill-switch complexity without a material benefit.
 
@@ -214,6 +230,19 @@ To remove the integration:
 ```bash
 ./scripts/uninstall-background-chrome.sh
 ```
+
+### Optional raw CDP through Browser Harness
+
+The built-in `chrome_*` extension workspace remains the default browser path. A second, deliberately broader backend can be enabled for advanced DevTools operations such as network inspection, downloads/uploads or CDP methods not represented by the managed workspace:
+
+```bash
+export MAC_DEV_BRIDGE_ADVANCED_BROWSER=1
+# Optional when Browser Harness uses a non-default daemon/socket:
+# export MAC_DEV_BRIDGE_ADVANCED_BROWSER_NAME=default
+# export MAC_DEV_BRIDGE_ADVANCED_BROWSER_SOCKET="$HOME/.config/browser-harness/runtime/bu-default.sock"
+```
+
+MDB talks directly to an **already-running Browser Harness daemon** over its same-user Unix socket; it does not execute arbitrary Browser Harness Python and does not install/start Browser Harness automatically. The `browser_cdp_*` tools are hidden until the explicit opt-in is present. Raw CDP is a separate authority surface and does not weaken or replace the existing `chrome_*` managed-tab routing. When **Strict approvals** is enabled, raw CDP/session/event tools fail closed because arbitrary CDP methods cannot be soundly reduced to MDB's URL-pattern grants; use `chrome_*` in that mode. Raw CDP `params` are always redacted from the MDB audit log, including full audit mode.
 
 ### Desktop apps and focus
 
@@ -274,6 +303,11 @@ These are read by `bridge.mjs` on both transports.
 | `MAC_DEV_BRIDGE_UNLOCK_RECHECK_MS` | `3000` | How often the latch is re-read while a pty session or a federated child exists and the client is silent. Bounds how long either can outlive a removed unlock file. |
 | `MAC_DEV_BRIDGE_SHELL` | login shell | Shell used for `shell_exec`/`shell_start`. |
 | `MAC_DEV_BRIDGE_UI_HELPER` | `bin/MacUIHelper` beside `bridge.mjs` | Optional override for the native Swift desktop-control helper. `ui_*` tools are hidden if it is unavailable. |
+| `MAC_DEV_BRIDGE_UI_CURSOR_HELPER` | `bin/MacUICursorOverlay` beside `bridge.mjs` | Optional override for the click-through virtual AI cursor overlay. Desktop control remains usable if it is unavailable. |
+| `MAC_DEV_BRIDGE_ADVANCED_BROWSER` | off | Explicitly opt into the separate Browser Harness raw-CDP backend (`1`/`true`). |
+| `MAC_DEV_BRIDGE_ADVANCED_BROWSER_NAME` | `default` | Browser Harness daemon name used to derive its standard Unix socket. |
+| `MAC_DEV_BRIDGE_ADVANCED_BROWSER_RUNTIME_DIR` | `~/.config/browser-harness/runtime` | Override Browser Harness runtime directory used for socket discovery. |
+| `MAC_DEV_BRIDGE_ADVANCED_BROWSER_SOCKET` | derived from runtime/name | Exact Browser Harness Unix socket override. |
 | `MAC_DEV_BRIDGE_DEFAULT_OUTPUT_BYTES` | `1000000` | Default per-call output cap. |
 | `MAC_DEV_BRIDGE_MAX_OUTPUT_BYTES` | `8000000` | Ceiling a call may request. |
 | `MAC_DEV_BRIDGE_PTY_PERL` | `/usr/bin/perl` | Interpreter for the pty helper. |

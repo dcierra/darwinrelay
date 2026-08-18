@@ -4,6 +4,14 @@
 
 ### Native desktop computer control (private line)
 
+- P2: added targeted `ui_ax_query` and coordinate-to-semantic `ui_ax_at`; Accessibility snapshots now batch attribute IPC and enable `AXEnhancedUserInterface` best-effort for richer complex-app trees.
+- P2: added PID-targeted background mouse/keyboard input with `preserve_focus`, explicit `background`/`foreground` modes, and `auto` mode that can perform one verified foreground fallback only after a supplied postcondition fails. Explicit background mode never activates the target.
+- P2: added `ui_sequence` for bounded deterministic multi-step native bursts in one helper process, including observation-ref validation, unioned Strict approvals and recursive audit redaction.
+- P2: added an independent click-through `MacUICursorOverlay` and `ui_cursor`; it never moves the physical pointer, is reclaimed with bridge teardown, and can be rendered into returned screenshots.
+- P2: added explicit CoreGraphics event-post permission reporting/gating (`postEventsGranted`) and a menu-bar `Input` readiness indicator.
+- P2: hardened synthesized keyboard delivery and native file panels: keyboard bursts now remain alive for a bounded WindowServer delivery-settle, foreground activation is verified through `AXFrontmost`, Go-to-Folder opens with a private CoreGraphics event source plus explicit modifier transitions, and path commit occurs only after `PathTextField` is verifiably focused.
+- P2: added an optional, disabled-by-default Browser Harness-compatible raw-CDP socket backend (`browser_cdp_*`). It is isolated from the managed `chrome_*` workspace, checks same-user socket ownership, redacts raw CDP params from audit, and is blocked while Strict approvals is enabled.
+
 - Added a Swift `MacUIHelper` and built-in `ui_*` tools for native macOS status, application/window discovery, Accessibility trees, ScreenCaptureKit screenshots, combined observations, semantic AX actions, application launch/activation, CoreGraphics mouse/keyboard input, and clipboard access.
 - Returned screenshots as native MCP image content instead of forcing image bytes through a text response. `ui_observe` combines the AX tree and visual frame so the model can use semantic controls first and pixel coordinates only as a fallback.
 - Made desktop control optional and fail-soft for existing users: the helper is advertised only when its executable exists, `install.sh` attempts an independent native build, and a failed/missing helper leaves the existing shell/filesystem/PTY/browser surface intact.

@@ -157,6 +157,11 @@ if command -v xcrun >/dev/null 2>&1 && command -v swiftc >/dev/null 2>&1; then
   else
     warn "Note: native desktop-control helper failed to build; terminal/filesystem tools remain available."
   fi
+  if MAC_DEV_BRIDGE_UI_CURSOR_OUTPUT="$INSTALL_DIR/bin/MacUICursorOverlay" "$INSTALL_DIR/scripts/build-mac-ui-cursor.sh" >/dev/null; then
+    say "Built virtual AI cursor overlay."
+  else
+    warn "Note: virtual AI cursor overlay failed to build; desktop control remains available without it."
+  fi
 else
   warn "Note: Swift/Xcode Command Line Tools are unavailable; native ui_* tools will not be advertised."
 fi

@@ -227,6 +227,14 @@ The extension requests `tabs`, `tabGroups`, `storage`, `scripting`, `nativeMessa
 
 Some browser actions cannot be made reliable in the background without defeating Chrome's security model. CAPTCHAs, passkeys, native permission prompts, downloads requiring trusted user gestures, file pickers, and similar browser/OS UI may require the human to foreground Chrome. The background tools report that boundary instead of silently activating the browser.
 
+## Optional raw CDP backend
+
+`MAC_DEV_BRIDGE_ADVANCED_BROWSER=1` is an explicit second browser authority surface. When enabled, MDB can talk directly to an already-running Browser Harness daemon over its same-user Unix socket and issue arbitrary Chrome DevTools Protocol `Domain.method` requests. The adapter does **not** start/install Browser Harness, execute its arbitrary Python surface, or replace the managed `chrome_*` extension workspace. Socket ownership is checked against the current uid before use.
+
+Raw CDP is intentionally hidden when the opt-in is absent and **fails closed whenever Strict approvals is enabled**. Unlike the managed extension API, an arbitrary CDP method can enumerate targets, inspect network events, evaluate JavaScript, alter cookies/storage, upload files or navigate outside a predeclared site; there is no sound generic mapping from `Domain.method + params` to MDB's URL-pattern grant. Pretending otherwise would make Strict mode misleading. Use the narrower `chrome_*` tools when scoped URL approvals are required.
+
+The raw-CDP adapter preserves the Browser Harness one-JSON-line Unix-socket protocol and bounds response bytes/time. Treat enabling it as equivalent to granting broad control of whatever browser targets that daemon can reach.
+
 ## Native desktop-control helper
 
 The private desktop-control line adds `MacUIHelper`, a Swift executable used by the built-in `ui_*` tools. It deliberately does **not** run as a daemon: `bridge.mjs` starts one detached helper process for a tool call, bounds its output/time, tracks it in the same in-flight process set as foreground shell commands, and reclaims its process group on bridge revocation or teardown.
@@ -238,20 +246,23 @@ The authority is large:
 - Accessibility (`AXUIElement`) can inspect visible/control metadata and perform supported UI actions.
 - ScreenCaptureKit can expose anything visible on a captured display/window/region, including sensitive data not present in the Accessibility tree.
 - Vision OCR turns captured pixels into model-readable text and bounds; it does not reduce the sensitivity of the underlying screenshot.
-- CoreGraphics input can synthesize mouse, keyboard, and drag events into the logged-in desktop session across displays.
+- CoreGraphics input can synthesize mouse, keyboard, and drag events into the logged-in desktop session across displays. Foreground delivery uses the global event tap; PID-targeted background delivery is best-effort and may be silently rejected by an application.
+- The optional `MacUICursorOverlay` is visual-only: it is click-through, does not warp the physical cursor, and is reclaimed with bridge teardown.
 - Window/dialog/file-panel tools can move/resize/minimize/close windows and confirm native Open/Save dialogs.
 - Clipboard tools can read or replace general-pasteboard text.
 - Application launch/activation can change foreground focus.
 
-macOS TCC remains outside the bridge's control. Accessibility and Screen Recording permissions must be granted by the operator to the responsible application/process chain. The helper reports permission state and fails closed when a required permission is absent; it does not edit TCC databases.
+macOS TCC remains outside the bridge's control. Accessibility, Screen Recording and CoreGraphics event-post permissions must be granted by the operator to the responsible application/process chain. The helper reports each state and fails closed when a required permission is absent; it does not edit TCC databases.
 
 AX values whose role/subrole indicates a secure field are redacted from `ui_tree`. This is not a complete secret boundary: screenshots, clipboard reads, application titles, non-secure text fields, and other UI-visible state can still contain sensitive data.
 
-Input text is treated specially by the local audit layer. `ui_keyboard.text`, `ui_clipboard_write.text`, and `ui_action` values for `set_value` are replaced with byte-count/SHA-256 correlation markers before any audit serialization, including `MAC_DEV_BRIDGE_AUDIT_MODE=full`.
+Input text is treated specially by the local audit layer. `ui_keyboard.text`, `ui_clipboard_write.text`, `ui_action` values for `set_value`, and the equivalent nested `ui_sequence` fields are replaced with byte-count/SHA-256 correlation markers before any audit serialization, including `MAC_DEV_BRIDGE_AUDIT_MODE=full`. Raw `browser_cdp_call.params` is likewise replaced wholesale with a JSON byte-count/hash marker because CDP parameters can contain cookies, headers, form values or script source.
 
 AX references are ephemeral and include a 64-bit fingerprint: `ax:<pid>:<child.path>:<fingerprint>`. Before semantic mutation, the helper re-resolves the path and recomputes identity from role, subrole, identifier, title, description, and frame. If only the AX child indices changed, it performs a bounded search for the exact fingerprint and accepts recovery only when there is exactly one match. Changed, missing, or ambiguous identities fail with `UI_ELEMENT_STALE`. `ui_tree`/`ui_observe` additionally issue an in-memory 60-second observation id (bounded to 64 generations); mutation calls can require the ref to have existed in that observation. `ui_action.precondition` rechecks semantic properties immediately before mutation and `ui_action.verify` performs a bounded postcondition wait. These are correctness controls, not cryptographic/security boundaries against same-user code.
 
-Strict approvals covers all dedicated native mutation tools as well as detected shell/AppleScript foreground actions. When Strict mode is enabled, application activation/launch, semantic actions, pointer/keyboard/drag input, window actions, dialog actions, and file-panel actions consume the existing one-use app-scoped foreground grant. Relaxed mode permits them directly. As elsewhere in this project, this is an operator-drift control rather than a sandbox against an already-authorized unrestricted shell.
+Strict approvals covers all dedicated native mutation tools as well as detected shell/AppleScript foreground actions. `ui_sequence` resolves the union of applications referenced by every mutation step and consumes one grant for that complete burst. When Strict mode is enabled, application activation/launch, semantic actions, pointer/keyboard/drag input, window actions, dialog actions, and file-panel actions consume the existing one-use app-scoped foreground grant. Relaxed mode permits them directly. As elsewhere in this project, this is an operator-drift control rather than a sandbox against an already-authorized unrestricted shell.
+
+PID-targeted input is a UX optimization, not a stronger correctness primitive. `CGEventPostToPid` can report no transport error while a native application ignores the event. In `auto` mode MDB can retry once through the foreground compatibility path only after an explicit semantic `verify` clause fails; explicit `background` mode never activates the target. Consequential raw input should therefore carry a postcondition.
 
 Display/window/region coordinates use Quartz global display space. Explicit display-local routing is translated by the helper. This is a correctness convention, not isolation: a coordinate action can affect whichever UI occupies that location when it is emitted, so semantic refs plus re-observation are preferred whenever Accessibility exposes the target.
 
