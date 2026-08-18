@@ -1,26 +1,26 @@
 {
   "name": "mac-developer-bridge",
-  "version": "0.3.0-desktop.1",
+  "version": "0.4.0-desktop.1",
   "type": "module",
   "description": "Give ChatGPT terminal, browser, and native macOS desktop control through one local MCP bridge.",
   "scripts": {
     "start": "node bridge.mjs",
     "start:http": "node mcp-http.mjs",
-    "check": "node --check bridge.mjs && node --check mcp-http.mjs && node --check lib/chrome-extension-client.mjs && node --check lib/mac-ui-helper.mjs && node --check scripts/chrome-native-host.mjs && node --check chrome-extension/service-worker.js && bash scripts/check-mac-ui-helper.sh && bash scripts/check-menubar.sh",
-    "test": "node tests/smoke.mjs && node tests/integration.mjs && node tests/adversarial.mjs && node tests/http.mjs && node tests/oauth.mjs && node tests/pty.mjs && node tests/federation.mjs && node tests/chrome-background.mjs && node tests/desktop-control.mjs && bash tests/installer-mock.sh"
+    "check": "node --check bridge.mjs && node --check mcp-http.mjs && node --check lib/chrome-extension-client.mjs && node --check lib/mac-ui-helper.mjs && node --check scripts/chrome-native-host.mjs && node --check chrome-extension/service-worker.js && bash scripts/check-mac-ui-helper.sh && bash scripts/check-menubar.sh && bash scripts/check-desktop-fixture.sh",
+    "test": "node tests/smoke.mjs && node tests/integration.mjs && node tests/adversarial.mjs && node tests/http.mjs && node tests/oauth.mjs && node tests/pty.mjs && node tests/federation.mjs && node tests/chrome-background.mjs && node tests/desktop-control.mjs && node tests/desktop-control-native.mjs && bash tests/installer-mock.sh"
   },
   "engines": {
     "node": ">=18"
   },
   "license": "MIT",
-  "author": "Alexander R\u00e5dahl Benz",
+  "author": "Alexander Rådahl Benz",
   "repository": {
     "type": "git",
-    "url": "https://github.com/alexanderradahl/mac-developer-bridge.git"
+    "url": "https://github.com/dcierra/mac-developer-bridge-private.git"
   },
-  "homepage": "https://github.com/alexanderradahl/mac-developer-bridge#readme",
+  "homepage": "https://github.com/dcierra/mac-developer-bridge-private#readme",
   "bugs": {
-    "url": "https://github.com/alexanderradahl/mac-developer-bridge/issues"
+    "url": "https://github.com/dcierra/mac-developer-bridge-private/issues"
   },
   "keywords": [
     "mcp",
@@ -55,7 +55,5 @@
     "DEPLOY.md",
     "CHANGELOG.md"
   ],
-  "publishConfig": {
-    "access": "public"
-  }
+  "private": true
 }

@@ -1,18 +1,8 @@
 # Native Desktop Control
 
-This document describes the private full-control extension of Mac Developer Bridge. The goal is to let the ChatGPT-side agent observe and operate a logged-in macOS desktop while preserving the existing shell/filesystem/PTY/browser architecture and kill switch.
+This private line extends Mac Developer Bridge into a native macOS computer-use runtime while preserving the existing shell/filesystem/PTY/Chrome architecture and the global unlock/kill switch.
 
-## Design goals
-
-1. Keep ChatGPT as the only reasoning loop. The Mac side exposes deterministic execution/observation primitives.
-2. Prefer semantic APIs over coordinates: Accessibility first, visual input second.
-3. Return screenshots as native MCP image content so the model can inspect pixels directly.
-4. Keep desktop control optional. If the native helper is missing or cannot build, the existing bridge remains usable.
-5. Do not weaken macOS TCC, SIP, Keychain, or secure-input boundaries.
-6. Make stale UI targets fail closed before an action.
-7. Keep the current global unlock/kill-switch semantics and reclaim any in-flight native helper.
-
-## P0 architecture
+## Architecture
 
 ```text
 ChatGPT
@@ -21,135 +11,166 @@ ChatGPT
   v
 bridge.mjs
   |-- shell / filesystem / PTY / Codex
-  |-- Background Chrome extension
-  `-- ui_* tools
+  |-- signed-in Background Chrome workspace
+  `-- native ui_* tools
         |
-        | bounded JSON stdin/stdout, one process per call
+        | bounded JSON stdin/stdout; one helper process per call
         v
       MacUIHelper (Swift)
         |-- AppKit / NSWorkspace
-        |-- ApplicationServices / AXUIElement
+        |-- Accessibility / AXObserver
         |-- ScreenCaptureKit
         |-- CoreGraphics / CGEvent
+        |-- Vision OCR
         `-- NSPasteboard
 ```
 
-`MacUIHelper` is intentionally not a long-lived daemon in P0. This makes lifecycle and revocation straightforward: every call is a detached child tracked in `bridge.mjs`'s in-flight set, and the existing teardown path kills that process group if the bridge is revoked or terminated.
+The Mac side is deterministic execution/observation infrastructure; reasoning remains in the ChatGPT-side agent. Semantic Accessibility operations are preferred over visual coordinates, with screenshots/OCR/input as fallbacks for canvas, RDP and custom-rendered surfaces.
 
 ## Observe -> act -> verify
 
-The intended control loop is:
+A normal native workflow is:
 
 ```text
 ui_observe
-  -> choose semantic AX element when possible
-  -> ui_action / ui_keyboard
-  -> ui_observe
-  -> verify state
-  -> visual ui_mouse fallback only when needed
+  -> choose AX ref when available
+  -> ui_action(precondition=..., verify=...)
+  -> ui_wait_for / ui_assert
+  -> re-observe when layout changed
 ```
 
-For a canvas/RDP/custom-rendered surface the AX tree may contain little useful detail. In that case the model can use the screenshot returned by `ui_observe` and operate global coordinates with `ui_mouse`/`ui_keyboard`.
+For visual-only UI:
 
-## Tool surface
+```text
+ui_screenshot / ui_ocr
+  -> ui_mouse / ui_drag_drop / ui_keyboard
+  -> ui_wait_visual
+  -> screenshot/OCR verification
+```
 
-### Observation
+## Observation and synchronization
 
-- `ui_status`: Accessibility/Screen Recording state, frontmost app, displays.
-- `ui_app_list`: running application metadata.
-- `ui_window_list`: CoreGraphics window metadata and bounds.
-- `ui_tree`: bounded AX hierarchy for a pid or the frontmost application.
-- `ui_screenshot`: scaled display capture as MCP image content.
-- `ui_observe`: status + AX tree + optional screenshot in one call.
+- `ui_status` — Accessibility/Screen Recording state, frontmost app and canonical display geometry.
+- `ui_app_list` — running application metadata.
+- `ui_window_list` — CoreGraphics windows, global bounds and display routing.
+- `ui_tree` — bounded Accessibility hierarchy and fingerprinted refs.
+- `ui_screenshot` — ScreenCaptureKit display/window/region capture as native MCP image content.
+- `ui_observe` — status + AX tree + optional display/window/region screenshot.
+- `ui_wait_for` — AXObserver-assisted bounded wait with polling fallback.
+- `ui_assert` — immediate semantic state assertion.
+- `ui_ocr` — Apple Vision OCR over a display/window/region, with text confidence and pixel bounds.
+- `ui_wait_visual` — bounded pixel-change or visual-stability wait.
 
-### Actions
+`ui_tree` and `ui_observe` return a short-lived `observationId`. Mutation calls may bind refs to that observation. A ref that was not part of the observation fails before the native helper is allowed to act.
 
-- `ui_app_launch`: launch by path, bundle id, or name.
-- `ui_app_activate`: bring a running app forward.
-- `ui_action`: semantic AX press/focus/set-value and related actions.
-- `ui_mouse`: move/click/double-click/right-click/scroll.
-- `ui_keyboard`: Unicode typing or supported key/modifier combinations.
-- `ui_clipboard_read` / `ui_clipboard_write`: general pasteboard text.
+## Actions
 
-## AX references
+- `ui_app_launch`, `ui_app_activate`
+- `ui_action` — semantic AX press/focus/set-value/menu/increment/decrement/etc.; supports a target precondition and a post-action verification clause.
+- `ui_window_action` — focus/raise/move/resize/set bounds/minimize/restore/full-screen/close.
+- `ui_mouse` — move/click/double/right/scroll/smooth drag in canonical Quartz coordinates.
+- `ui_drag_drop` — drag between AX refs or coordinates, including display-local coordinates.
+- `ui_keyboard` — Unicode typing, named virtual keys, raw key codes, modifiers, key down/up and bounded repeats.
+- `ui_dialogs`, `ui_dialog_action` — semantic native sheet/dialog discovery and button actions.
+- `ui_file_dialog` — deterministic open/save panel path navigation using the standard Go-to-Folder UI plus Accessibility semantics.
+- `ui_clipboard_read`, `ui_clipboard_write`.
 
-Observation returns refs in this form:
+## AX target safety
+
+AX refs have the form:
 
 ```text
 ax:<pid>:<child.path>:<fingerprint>
 ```
 
-The path locates the element in the current AX hierarchy. The 64-bit FNV-1a fingerprint is calculated from role, subrole, identifier, title, description, and rounded frame. Before `ui_action` executes, the helper resolves the path again and compares the fingerprint. A missing path or mismatch produces `UI_ELEMENT_STALE` before any action is sent.
+The 64-bit FNV-1a fingerprint covers role, subrole, identifier, title, description and rounded frame. Immediately before a semantic action the helper resolves the path again and recomputes the fingerprint. If AppKit merely re-indexed child arrays, the helper performs a bounded application-tree search for that exact fingerprint and recovers only when there is exactly one match. Changed, missing, or ambiguous targets fail as `UI_ELEMENT_STALE`.
 
-The fingerprint is a correctness guard, not authentication. It prevents the common stale-target failure mode; it is not intended to resist a hostile same-user process capable of rewriting bridge/helper code.
+For consequential operations, the bridge provides two additional layers:
 
-## Screenshot transport
+1. `observation_id` binds a ref to a recent `ui_tree`/`ui_observe` result (60-second in-memory lifetime, bounded to 64 generations).
+2. `precondition` rechecks semantic properties immediately before mutation; mismatch fails as `UI_PRECONDITION_FAILED`.
 
-`ui_screenshot` and screenshot-enabled `ui_observe` use the bridge's existing raw-MCP-content escape:
+`ui_action.verify` performs a bounded postcondition wait and returns `UI_POSTCONDITION_FAILED` if the requested state never appears.
 
-```text
-content[0] = structured/text metadata
-content[1] = { type: "image", mimeType, data }
-```
+These are correctness guards, not authentication boundaries against hostile same-user code.
 
-The base64 image payload is not copied into structured metadata or audit entries. The structured part retains width, height, display id, status, and AX tree as applicable.
+## Coordinate system and multiple displays
 
-P0 supports display capture and scales down without upscaling. JPEG is the default to keep MCP response size bounded; PNG is available when lossless pixels matter.
+Pointer actions and region capture use **Quartz global display coordinates** in points. The primary display begins at `(0,0)`; secondary displays may have positive or negative origins. `ui_status` reports, per display:
+
+- Quartz bounds;
+- AppKit frame/visible frame;
+- backing scale factor;
+- pixel dimensions;
+- logical-to-pixel scale.
+
+For `ui_mouse`, `ui_drag_drop`, and region screenshots, a display id can make coordinates display-local; the helper translates them into Quartz global space. Window metadata also reports the display containing the window center.
+
+## Screen capture and OCR
+
+Display and desktop-independent window screenshots use ScreenCaptureKit. Region capture uses the native cross-display screenshot API on macOS 15.2+ and a fail-closed single-display fallback on older supported releases.
+
+Screenshot content is returned as MCP `image` blocks; base64 bytes are not duplicated into structured metadata or the audit log. JPEG is the bounded default, PNG is available for lossless inspection.
+
+`ui_ocr` uses `VNRecognizeTextRequest` locally. It returns recognized strings, confidence, normalized Vision bounds and top-left-origin pixel bounds in the returned image. Automatic language detection is the default and explicit recognition languages are supported.
+
+## Visual waits
+
+`ui_wait_visual` downsamples repeated captures to a fixed 64x64 grayscale signature and reports:
+
+- mean normalized pixel difference;
+- changed-pixel fraction.
+
+It can wait for either a change from the baseline or a stable interval. This avoids sending a stream of screenshots through MCP just to determine whether a visual surface finished updating.
+
+## Native dialogs and file panels
+
+`ui_dialogs` discovers AX sheets/system dialogs and returns button refs. `ui_dialog_action` can press the default/cancel/named button.
+
+`ui_file_dialog` deliberately drives only Apple's standard open/save panel path. It opens Go-to-Folder with bounded key-equivalent retries, resolves `PathTextField` by Accessibility identifier, assigns the absolute path through AX, and considers navigation complete only when that nested field actually disappears. `NSSavePanel` filenames are set through the stable `saveAsNameTextField` identifier before the outer Open/Save button is pressed semantically. Both NSOpenPanel and NSSavePanel are covered by the native integration fixture.
+
+Custom application-specific file browsers remain ordinary UI and should be handled with `ui_tree`/`ui_screenshot`/`ui_action` instead.
+
+## Helper lifecycle and performance
+
+The helper remains short-lived rather than becoming a resident daemon. On the development M4 host, 20 `status` launches measured a **50.46 ms median** and **55.75 ms p95 excluding the one cold 313.78 ms outlier**. That startup cost is small relative to ScreenCaptureKit, Vision and model/tool round trips, while one-process-per-call gives simpler revocation and failure isolation.
+
+Every helper process is detached into its own reclaimable group, tracked in the bridge's in-flight set, given a minimal environment allowlist and killed on bridge revocation/teardown. A resident helper is therefore intentionally not part of this release.
 
 ## Permissions
 
-The helper observes, but does not alter, macOS permission state:
+The helper observes but never modifies TCC:
 
-- Accessibility is required for AX tree access and synthesized input.
-- Screen Recording is required for ScreenCaptureKit screenshots.
-- Full Disk Access remains relevant to filesystem/shell authority but is independent of AX/Screen Recording.
+- Accessibility is required for AX observation and synthesized input.
+- Screen Recording is required for ScreenCaptureKit pixels/OCR/visual waits.
+- Full Disk Access affects protected filesystem authority and is displayed separately in the menu-bar app.
 
-`ui_status` is the first diagnostic call after installation or a TCC change.
+The menu-bar app shows `AX`, `Screen` and `FDA` status and links to macOS Privacy & Security. Login/lock screens, Secure Input, passkeys, authorization dialogs and other security-sensitive OS surfaces remain subject to macOS restrictions.
 
-## Approval model
+## Approval and audit model
 
-Relaxed mode matches the existing unrestricted-operator model and allows native mutations directly.
+Relaxed mode is the default unrestricted-operator mode. Strict mode requires the existing single-use, app-scoped foreground grant for native mutation tools, including window/dialog/file-picker/drag operations. Semantic cross-application drag resolves every referenced pid and requires all involved applications in the same grant; a file-picker `path` is treated only as a file path, never as an application identity.
 
-Strict mode extends the existing one-use foreground GUI grant to dedicated native mutation tools. The bridge resolves the target app from name, bundle id, pid/ref, or the current frontmost application and consumes `FOREGROUND_GUI_APPROVED` before the action.
-
-The approval mechanism is not a sandbox: unrestricted shell authority can bypass same-user policy mechanisms. It is meant to prevent accidental/unattended foreground drift and make operator intent observable.
-
-## Audit handling
-
-The following fields are always replaced before audit serialization, including full audit mode:
+Sensitive input is always replaced before audit serialization, including full audit mode:
 
 - `pty_write.data`
 - `ui_keyboard.text`
 - `ui_clipboard_write.text`
-- `ui_action.value` when `action=set_value`
+- `ui_action.value` for `set_value`
 
-The replacement records byte length plus a short SHA-256 prefix. Observation tools can inherently return sensitive visible state, so screenshots, clipboard reads, and ordinary AX text should be treated as privileged data.
+Observation itself is privileged: screenshots, OCR, clipboard reads and ordinary AX values can contain sensitive user-visible data.
 
 ## Browser relationship
 
-For normal web automation, Background Chrome remains preferred because it reuses the signed-in MDB tab pool without routine focus theft. `shell_exec` and `shell_start` continue to reject direct Chrome automation paths.
+Normal web work should still use the signed-in `chrome_*` MDB workspace because it can operate without routine focus theft. Direct Chrome AppleScript/JXA/executable/shell-web-open paths remain rejected by `shell_exec`/`shell_start`.
 
-The private full-desktop `ui_*` surface is deliberately capable of operating a foreground Chrome window. That is needed for browser/OS surfaces the extension cannot own, including some native dialogs and visual-only flows. Therefore "Chrome is background-only" is no longer a universal statement once full desktop control is enabled.
+The native `ui_*` surface is deliberately capable of foreground browser/OS interaction when a background extension cannot own the surface, such as native panels or visual-only controls.
 
-## P1 roadmap
+## Validation
 
-- `ui_wait_for` backed by `AXObserver` notifications with bounded polling fallback.
-- Window- and region-targeted ScreenCaptureKit capture.
-- Native window focus/move/resize/minimize/full-screen primitives.
-- Mouse drag and richer key-code mapping.
-- File-picker helpers and drag/drop workflows.
-- Observation generations and optional stronger target preconditions for consequential actions.
-- Post-action verification helpers that can assert target state without requiring a full observation.
-- Dedicated deterministic native UI fixture for local integration testing.
+The desktop layer has two test tiers:
 
-## P2 roadmap
+1. deterministic protocol tests with a fake helper — tool advertisement, native image passthrough, observation binding, Strict approvals and audit redaction;
+2. a real AppKit fixture — semantic set/press + postconditions, AX waits/assertions, ScreenCaptureKit window capture, Vision OCR, window geometry changes, native dialogs, visual-change waits, drag/drop, NSOpenPanel and NSSavePanel.
 
-- Vision OCR as a fallback for inaccessible/custom-rendered UI.
-- Multi-display/Spaces coordinate normalization and explicit display routing.
-- Image-diff/change detection for efficient visual waits.
-- Higher-level native dialog handling.
-- Optional long-lived helper only if profiling proves per-call process startup is a material bottleneck; lifecycle/kill-switch containment must be preserved.
-
-## Production rollout rule
-
-Do not replace a working production MDB in place while developing this line. Keep a separate checkout/data directory, run protocol/unit/native read-only tests there, and only switch the menu-bar app/tunnel after the candidate branch passes the full suite and the operator explicitly chooses the cutover.
+The native fixture test builds everywhere on macOS. GitHub-hosted macOS is deliberately treated as a compile-only environment for the mutable native fixture because runner images can report Accessibility/Screen Recording while still failing `AXPress`/`CGEvent` delivery nondeterministically. The deterministic `desktop-control.mjs` suite exercises the complete MCP desktop surface in hosted CI; the real mutable AppKit E2E runs on an interactive Mac, or on self-hosted CI when `MDB_RUN_NATIVE_DESKTOP_E2E=1` is explicitly set. If an interactive run lacks Accessibility/Screen Recording, it reports that permission boundary and skips after the successful build.
