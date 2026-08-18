@@ -426,6 +426,21 @@ final class Controller: NSObject, NSApplicationDelegate {
         // precisely while the menu is open and being read.
         RunLoop.main.add(timer, forMode: .common)
         pollTimer = timer
+
+        // Deployment/recovery automation can ask the menu app to restore service
+        // without driving the status-item UI through Accessibility. This is kept
+        // explicit rather than automatic on every launch: a normal launch still
+        // starts stopped, preserving the operator's ability to inspect settings
+        // before exposing the MCP endpoint.
+        if CommandLine.arguments.contains("--start") {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if case .stopped = self.state {
+                    self.startBridge()
+                    self.render()
+                }
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {

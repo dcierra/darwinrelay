@@ -4,6 +4,7 @@
 
 ### Native desktop computer control (private line)
 
+- Menu-bar deployment hardening: `MacDevBridge.app --start` can restore the named tunnel + HTTP transport without Accessibility-driven menu clicks, and `menubar/build.sh` now preserves a real code-signing identity when copying the app into `/Applications` instead of accidentally re-signing the installed copy ad-hoc.
 - P2: added targeted `ui_ax_query` and coordinate-to-semantic `ui_ax_at`; Accessibility snapshots now batch attribute IPC and enable `AXEnhancedUserInterface` best-effort for richer complex-app trees.
 - P2: added PID-targeted background mouse/keyboard input with `preserve_focus`, explicit `background`/`foreground` modes, and `auto` mode that can perform one verified foreground fallback only after a supplied postcondition fails. Explicit background mode never activates the target.
 - P2: added `ui_sequence` for bounded deterministic multi-step native bursts in one helper process, including observation-ref validation, unioned Strict approvals and recursive audit redaction.

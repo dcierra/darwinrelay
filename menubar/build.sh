@@ -111,7 +111,13 @@ INSTALLED=""
 for dest in /Applications "$HOME/Applications"; do
   [ -d "$dest" ] || mkdir -p "$dest" 2>/dev/null || continue
   if rm -rf "$dest/$NAME.app" 2>/dev/null && cp -R "$APP" "$dest/" 2>/dev/null; then
-    codesign --force --sign - "$dest/$NAME.app" >/dev/null 2>&1 || true
+    # Preserve the signature created above. Re-signing the installed copy ad-hoc
+    # changed its designated requirement/cdhash and defeated the whole purpose of
+    # using a real Apple Development / Developer ID identity for stable TCC grants.
+    codesign --verify --deep --strict "$dest/$NAME.app" >/dev/null 2>&1 || {
+      echo "warning: installed app signature verification failed: $dest/$NAME.app" >&2
+      continue
+    }
     INSTALLED="$dest/$NAME.app"
     break
   fi
@@ -124,6 +130,9 @@ Installed: $INSTALLED}
 
 Open it with:
   open "${INSTALLED:-$APP}"
+
+For unattended recovery/cutover, launch once with:
+  open -n "${INSTALLED:-$APP}" --args --start
 
 It will appear in the menu bar. Use Start, then "Copy ChatGPT Setup".
 
