@@ -77,6 +77,10 @@ Mac Developer Bridge is released under the [MIT License](LICENSE). Bug reports a
 - Unified-diff application through `git apply`
 - Stored Codex thread discovery and reading without resuming a thread or starting a Codex model turn
 - Paginated Codex turn retrieval for histories too large for a single response
+- Native macOS desktop observation through Accessibility (`AXUIElement`) plus ScreenCaptureKit screenshots
+- Semantic native UI actions, application launch/activation, CoreGraphics mouse/keyboard fallback, and clipboard access
+- Native screenshot results returned as MCP image content rather than base64 text blobs
+- Short-lived native helper processes rather than a resident desktop-control daemon
 - Local JSONL auditing
 - Outbound-only private connectivity through OpenAI Secure MCP Tunnel, or a plain-HTTP loopback front end that Cloudflare Tunnel publishes over HTTPS
 - Per-user persistence through a macOS LaunchAgent
@@ -90,6 +94,19 @@ Git, package managers, Vercel CLI, database CLIs, AppleScript, browser CLIs, bui
 | Tool | Purpose |
 |---|---|
 | `bridge_status` | Runtime identity, paths, permissions context, shell, audit mode, Codex binary, focus policy, and background-Chrome status |
+| `ui_status` | Inspect Accessibility/Screen Recording readiness, frontmost application, and displays |
+| `ui_app_list` | List running macOS applications |
+| `ui_window_list` | List CoreGraphics windows and bounds |
+| `ui_tree` | Read a bounded Accessibility tree with ephemeral semantic element refs |
+| `ui_screenshot` | Capture a display through ScreenCaptureKit and return native MCP image content |
+| `ui_observe` | Return status + AX tree + optional screenshot as one computer-use observation |
+| `ui_app_launch` | Launch a native application by path, bundle id, or name |
+| `ui_app_activate` | Bring a running native application to the foreground |
+| `ui_action` | Perform a semantic AX action such as press, focus, or set value |
+| `ui_mouse` | Move/click/right-click/double-click/scroll using CoreGraphics events |
+| `ui_keyboard` | Type Unicode text or send supported hotkeys using CoreGraphics events |
+| `ui_clipboard_read` | Read the general pasteboard string/types |
+| `ui_clipboard_write` | Replace the general pasteboard with text |
 | `chrome_workspace_status` | Inspect the extension-owned `MDB` Chrome group and reusable background-tab pool; no website grant required |
 | `chrome_workspace_setup` | Create or expand the `MDB` pool once while Chrome is already foreground |
 | `chrome_tabs` | List tabs in the real signed-in Chrome profile without activating Chrome; scoped only when Strict approvals is on |
@@ -114,6 +131,46 @@ Git, package managers, Vercel CLI, database CLIs, AppleScript, browser CLIs, bui
 | `codex_thread_list` | Search and page stored Codex threads |
 | `codex_thread_turns_list` | Page stored turns with full, summary, or omitted items |
 | `audit_tail` | Read the local bridge audit tail |
+
+### Native desktop control
+
+This private line adds a small Swift helper, `MacUIHelper`, for native computer use. It is built from `desktop-helper/MacUIHelper.swift` and invoked as a **short-lived process per tool call**. There is no resident GUI-control daemon in this P0 implementation.
+
+The observation/action order is deliberate:
+
+1. Use `ui_observe` / `ui_tree` to obtain semantic Accessibility state.
+2. Prefer `ui_action` against the returned AX ref when the target exposes an Accessibility action.
+3. Use `ui_keyboard` or application shortcuts when semantic action is unavailable.
+4. Use `ui_screenshot` + `ui_mouse` only as the visual/coordinate fallback for canvas, RDP, custom-rendered controls, or other poor Accessibility surfaces.
+5. Observe again after state-changing actions instead of assuming they succeeded.
+
+`ui_observe` is the primary computer-use primitive. By default it returns the frontmost application's bounded AX tree and a scaled display screenshot. Screenshot data is returned as MCP `image` content, while the structured result contains the tree and compact image metadata.
+
+Build the helper directly without rebuilding or installing the menu-bar application:
+
+```bash
+./scripts/build-mac-ui-helper.sh
+./scripts/check-mac-ui-helper.sh
+```
+
+The `ui_*` tools are advertised only on macOS and only when an executable helper is available. `install.sh` attempts to build it when Swift/Xcode Command Line Tools are present; failure leaves the existing shell/filesystem bridge usable and simply keeps `ui_*` absent.
+
+macOS privacy controls remain real boundaries. Accessibility is required for AX inspection and input synthesis, and Screen Recording is required for screenshots. The helper reports those states through `ui_status`; it does not attempt to modify the TCC database.
+The private menu-bar source also shows a compact `Desktop: AX ✓/✗ · Screen ✓/✗ · FDA ✓/✗` status and links to Privacy & Security; it is observational only and does not grant permissions.
+
+Native input can take over the operator's foreground UI. Relaxed approvals (the default) permits that because this bridge is explicitly an unrestricted local operator. With **Strict approvals** enabled, state-changing native tools consume the same one-use, app-scoped foreground approval mechanism used for detected shell/AppleScript GUI control.
+
+Text passed to `ui_keyboard`, `ui_clipboard_write`, and `ui_action(action="set_value")` is never stored verbatim in the MDB audit log, even with `MAC_DEV_BRIDGE_AUDIT_MODE=full`; the audit keeps only length/hash correlation data. `ui_clipboard_read`, screenshots, and AX observations can still expose sensitive user-visible content to the model, which is inherent to desktop observation.
+
+Current P0 limitations are intentional and documented rather than hidden:
+
+- AX refs are ephemeral and fingerprinted (`ax:<pid>:<child.path>:<fingerprint>`). Before an action, the helper re-resolves the path and verifies role/subrole/identifier/title/description/frame identity; a missing path or mismatch fails as `UI_ELEMENT_STALE`. Legitimate layout/title changes can therefore require a fresh observation.
+- Screenshot capture currently targets displays, not individual windows/regions.
+- There is no `ui_wait_for` / AXObserver event primitive yet; callers re-observe explicitly.
+- Mouse drag, arbitrary virtual-key mapping, native window move/resize, OCR, and file-picker-specific helpers remain P1/P2 work.
+- Login/lock screens, Secure Input, passkeys, and security-sensitive OS UI remain subject to macOS restrictions and cannot be promised as automatable.
+
+See [`docs/DESKTOP_CONTROL.md`](docs/DESKTOP_CONTROL.md) for the architecture and implementation roadmap.
 
 ### Background Chrome without stealing focus
 
@@ -166,13 +223,16 @@ To remove the integration:
 
 ### Desktop apps and focus
 
-For native macOS apps, MDB still **prefers** background-capable APIs or web paths because Accessibility/AppleScript automation of apps such as Slack may require the target application to become frontmost. In the default relaxed mode, non-Chrome native app control is allowed without a separate terminal approval, so MDB can still complete the task when a foreground app interaction is genuinely necessary. Chrome is the exception: because MDB has a dedicated signed-in background extension, direct Chrome GUI automation is always forced back to the `MDB` browser path rather than allowed to steal focus.
+For native macOS apps, MDB still **prefers** background-capable APIs or web paths because Accessibility automation can require the target application to become frontmost. The dedicated `ui_*` surface now provides a structured path when native foreground interaction is genuinely necessary.
+
+Chrome web-page work should still use the signed-in `MDB` background group whenever possible. Direct Chrome AppleScript/JXA and shell `open` routing remain blocked by `shell_exec`/`shell_start`. The native `ui_*` surface is intentionally broader in this private full-control line, however: it can interact with a foreground Chrome window when browser security UI or another OS-level surface cannot be handled by the background extension. That is a deliberate capability expansion, not a no-focus-stealing guarantee.
 
 Prefer, in order:
 
 1. an API or MCP connector for the service;
 2. the service's web app through the signed-in `MDB` Chrome group;
-3. native-app GUI automation only when foreground interaction is genuinely required.
+3. semantic native `ui_tree` / `ui_action` operations;
+4. screenshot + mouse/keyboard fallback only when foreground interaction is genuinely required.
 
 When **Strict approvals** is enabled, native foreground app control is blocked unless the operator creates a one-use, app-scoped grant:
 
@@ -219,6 +279,7 @@ These are read by `bridge.mjs` on both transports.
 | `MAC_DEV_BRIDGE_UNLOCK_FILE` | `$DATA_DIR/FULL_ACCESS_ENABLED` | The revocable unlock latch. Re-read before **every** tool call. |
 | `MAC_DEV_BRIDGE_UNLOCK_RECHECK_MS` | `3000` | How often the latch is re-read while a pty session or a federated child exists and the client is silent. Bounds how long either can outlive a removed unlock file. |
 | `MAC_DEV_BRIDGE_SHELL` | login shell | Shell used for `shell_exec`/`shell_start`. |
+| `MAC_DEV_BRIDGE_UI_HELPER` | `bin/MacUIHelper` beside `bridge.mjs` | Optional override for the native Swift desktop-control helper. `ui_*` tools are hidden if it is unavailable. |
 | `MAC_DEV_BRIDGE_DEFAULT_OUTPUT_BYTES` | `1000000` | Default per-call output cap. |
 | `MAC_DEV_BRIDGE_MAX_OUTPUT_BYTES` | `8000000` | Ceiling a call may request. |
 | `MAC_DEV_BRIDGE_PTY_PERL` | `/usr/bin/perl` | Interpreter for the pty helper. |

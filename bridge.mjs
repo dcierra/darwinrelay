@@ -11,8 +11,9 @@ import { fileURLToPath } from "node:url";
 
 import { createFederation, consumePersonalApproval } from "./lib/federation.mjs";
 import { backgroundChromeCall, backgroundChromeStatus } from "./lib/chrome-extension-client.mjs";
+import { callMacUiHelper, macUiHelperAvailable, resolveMacUiHelper } from "./lib/mac-ui-helper.mjs";
 
-const BRIDGE_VERSION = "0.2.0";
+const BRIDGE_VERSION = "0.3.0-desktop.1";
 const SERVER_NAME = "mac-developer-bridge";
 const SERVER_TITLE = "Mac Developer Bridge";
 const MODERN_PROTOCOL = "2026-07-28";
@@ -35,6 +36,8 @@ const DEFAULT_SHELL = process.platform === "darwin" && fs.existsSync("/bin/zsh")
 const SHELL = process.env.MAC_DEV_BRIDGE_SHELL || DEFAULT_SHELL;
 const CODEX_BIN = process.env.CODEX_BIN || "codex";
 const BRIDGE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const MAC_UI_HELPER = resolveMacUiHelper({ bridgeDir: BRIDGE_DIR });
+const MAC_UI_AVAILABLE = macUiHelperAvailable(MAC_UI_HELPER);
 
 // Interactive pty sessions. Every limit below is a bound on a publicly reachable
 // endpoint, so each one carries the number it was measured against.
@@ -156,7 +159,7 @@ function serverInfo() {
     name: SERVER_NAME,
     title: SERVER_TITLE,
     version: BRIDGE_VERSION,
-    description: "Unrestricted local shell, filesystem, process, patch, and Codex-history access on the host Mac.",
+    description: "Unrestricted local shell, filesystem, process, browser, native macOS desktop-control, patch, and Codex-history access on the host Mac.",
   };
 }
 
@@ -455,10 +458,17 @@ function redactString(input) {
 // hash prefix keep the record useful for correlating a session without keeping the
 // secret.
 function auditSafeArguments(tool, args) {
-  if (tool !== "pty_write" || typeof args?.data !== "string") return args;
-  const bytes = Buffer.byteLength(args.data, "utf8");
-  const digest = crypto.createHash("sha256").update(args.data, "utf8").digest("hex").slice(0, 16);
-  return { ...args, data: `[REDACTED ${bytes} bytes sha256:${digest}]` };
+  const redactField = (source, field) => {
+    if (!source || typeof source[field] !== "string") return source;
+    const bytes = Buffer.byteLength(source[field], "utf8");
+    const digest = crypto.createHash("sha256").update(source[field], "utf8").digest("hex").slice(0, 16);
+    return { ...source, [field]: `[REDACTED ${bytes} bytes sha256:${digest}]` };
+  };
+  if (tool === "pty_write") return redactField(args, "data");
+  if (tool === "ui_keyboard") return redactField(args, "text");
+  if (tool === "ui_clipboard_write") return redactField(args, "text");
+  if (tool === "ui_action" && args?.action === "set_value") return redactField(args, "value");
+  return args;
 }
 
 async function audit(tool, argsInput, summary = {}, error = null) {
@@ -715,6 +725,182 @@ const TOOLS = [
     description: "Inspect the host identity, runtime paths, permissions context, configured shell, audit log, and Codex executable. This is read-only.",
     inputSchema: { type: "object", additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "ui_status",
+    title: "Mac desktop control status",
+    description: "Inspect native macOS desktop-control readiness: Accessibility trust, Screen Recording permission, frontmost app, and displays. Read-only and does not request permissions.",
+    inputSchema: { type: "object", additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "ui_app_list",
+    title: "List Mac applications",
+    description: "List running macOS applications with pid, bundle id, executable path, activation policy, and active/hidden state.",
+    inputSchema: {
+      type: "object",
+      properties: { include_background: { type: "boolean", default: false } },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "ui_window_list",
+    title: "List Mac windows",
+    description: "List CoreGraphics windows with ids, owner pids/names, titles, layers, bounds, and on-screen state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        max_windows: { type: "integer", minimum: 1, maximum: 2000, default: 300 },
+        on_screen_only: { type: "boolean", default: true },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "ui_tree",
+    title: "Read Mac Accessibility tree",
+    description: "Read a bounded Accessibility (AXUIElement) tree for a pid or the frontmost app. Returns semantic element refs, roles, titles, bounds, actions, and redacted secure-field values.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pid: { type: "integer", minimum: 1 },
+        max_depth: { type: "integer", minimum: 0, maximum: 20, default: 8 },
+        max_elements: { type: "integer", minimum: 1, maximum: 5000, default: 500 },
+        include_values: { type: "boolean", default: true },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "ui_screenshot",
+    title: "Capture Mac display",
+    description: "Capture a display through ScreenCaptureKit and return a native MCP image plus compact metadata. Requires Screen Recording permission.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        display_id: { type: "integer", minimum: 0 },
+        max_width: { type: "integer", minimum: 320, maximum: 6144, default: 1600 },
+        max_height: { type: "integer", minimum: 240, maximum: 6144, default: 1600 },
+        format: { type: "string", enum: ["jpeg", "png"], default: "jpeg" },
+        quality: { type: "number", minimum: 0.1, maximum: 1, default: 0.78 },
+        include_cursor: { type: "boolean", default: false },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "ui_observe",
+    title: "Observe Mac desktop",
+    description: "Combine the frontmost/native app Accessibility tree with an optional display screenshot. This is the primary observe step for desktop computer-use workflows.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        pid: { type: "integer", minimum: 1 },
+        max_depth: { type: "integer", minimum: 0, maximum: 20, default: 8 },
+        max_elements: { type: "integer", minimum: 1, maximum: 5000, default: 500 },
+        include_values: { type: "boolean", default: true },
+        include_screenshot: { type: "boolean", default: true },
+        display_id: { type: "integer", minimum: 0 },
+        max_width: { type: "integer", minimum: 320, maximum: 6144, default: 1600 },
+        max_height: { type: "integer", minimum: 240, maximum: 6144, default: 1600 },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "ui_app_launch",
+    title: "Launch Mac application",
+    description: "Launch a macOS application by path, bundle id, or app name. Activates it by default.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string" }, bundle_id: { type: "string" }, name: { type: "string" },
+        activate: { type: "boolean", default: true },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  {
+    name: "ui_app_activate",
+    title: "Activate Mac application",
+    description: "Bring a running macOS application to the foreground by pid, bundle id, or name.",
+    inputSchema: {
+      type: "object",
+      properties: { pid: { type: "integer", minimum: 1 }, bundle_id: { type: "string" }, name: { type: "string" } },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  {
+    name: "ui_action",
+    title: "Perform Mac Accessibility action",
+    description: "Perform a semantic Accessibility action on an element ref returned by ui_tree/ui_observe. Prefer this over coordinate clicks. Supports press, raise, confirm, cancel, increment, decrement, show_menu, focus, and set_value.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ref: { type: "string", minLength: 1 },
+        action: { type: "string", enum: ["press", "raise", "confirm", "cancel", "increment", "decrement", "show_menu", "focus", "set_value"] },
+        value: { type: "string", maxLength: 500000 },
+      },
+      required: ["ref", "action"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  },
+  {
+    name: "ui_mouse",
+    title: "Control Mac mouse",
+    description: "Fallback visual input using CoreGraphics events. Supports move, click, double_click, right_click, and scroll in global display coordinates.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["move", "click", "double_click", "right_click", "scroll"] },
+        x: { type: "number" }, y: { type: "number" }, delta_x: { type: "number", default: 0 }, delta_y: { type: "number", default: 0 },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  },
+  {
+    name: "ui_keyboard",
+    title: "Control Mac keyboard",
+    description: "Type Unicode text or send a supported key/hotkey through CoreGraphics. Typed text is always redacted from the MDB audit log.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: { type: "string", maxLength: 500000 },
+        key: { type: "string" },
+        modifiers: { type: "array", items: { type: "string", enum: ["command", "cmd", "shift", "option", "alt", "control", "ctrl", "fn", "function"] }, maxItems: 4 },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  },
+  {
+    name: "ui_clipboard_read",
+    title: "Read Mac clipboard",
+    description: "Read the current general pasteboard string and declared types.",
+    inputSchema: { type: "object", additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+  {
+    name: "ui_clipboard_write",
+    title: "Write Mac clipboard",
+    description: "Replace the general pasteboard with text. Clipboard text is always redacted from the MDB audit log.",
+    inputSchema: {
+      type: "object",
+      properties: { text: { type: "string", maxLength: 500000 } },
+      required: ["text"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   },
   {
     name: "chrome_workspace_status",
@@ -1212,8 +1398,76 @@ const TOOLS = [
 // MAC_DEV_BRIDGE_FULL_ACCESS_ACK in the environment still unlocks, unchanged —
 // but that is the operator's own process env, not a file anyone can revoke, so
 // it is deliberately not a kill-switch surface.
-// Foreground shell_exec children, so revocation can reclaim them.
+// Foreground shell_exec and native desktop-helper children, so revocation can reclaim them.
 const inFlightCommands = new Set();
+
+async function callNativeUi(command, payload = {}, options = {}) {
+  return await callMacUiHelper(command, payload, {
+    helperPath: MAC_UI_HELPER,
+    timeoutMs: options.timeoutMs ?? 15_000,
+    maxBytes: options.maxBytes ?? 20_000_000,
+    onSpawn: (child) => inFlightCommands.add(child),
+    onExit: (child) => inFlightCommands.delete(child),
+  });
+}
+
+async function uiApprovalTargetApps(args = {}) {
+  if (typeof args.name === "string" && args.name.trim()) return [args.name.trim()];
+  let pid = Number.isInteger(args.pid) ? args.pid : null;
+  if (!pid && typeof args.ref === "string") {
+    const match = /^ax:(\d+):/.exec(args.ref);
+    if (match) pid = Number.parseInt(match[1], 10);
+  }
+  const bundleId = typeof args.bundle_id === "string" ? args.bundle_id.trim() : "";
+  if (pid || bundleId) {
+    try {
+      const listed = await callNativeUi("apps", { include_background: true }, { timeoutMs: 5_000 });
+      const app = listed?.applications?.find((candidate) =>
+        (pid && candidate.pid === pid) || (bundleId && candidate.bundleId === bundleId));
+      if (app?.name) return [app.name];
+    } catch {}
+  }
+  if (typeof args.path === "string" && args.path.trim()) {
+    const base = path.basename(args.path.trim()).replace(/\.app$/i, "");
+    if (base) return [base];
+  }
+  try {
+    const status = await callNativeUi("status", {}, { timeoutMs: 5_000 });
+    if (status?.frontmostApplication?.name) return [status.frontmostApplication.name];
+  } catch {}
+  return ["Mac desktop"];
+}
+
+async function requireNativeUiApproval(tool, args) {
+  const settings = await readOperatorSettings();
+  if (!settings.strictApprovals) return null;
+  const apps = await uiApprovalTargetApps(args);
+  const risk = { reason: `native-ui-tool:${tool}`, apps };
+  const grant = await consumeForegroundGuiApproval(risk);
+  if (!grant) {
+    const error = new Error(`Desktop UI action is blocked because Strict approvals is enabled (targets: ${apps.join(", ")}). Approve a one-time foreground action with scripts/approve-foreground-gui.sh.`);
+    error.code = "GUI_FOCUS_BLOCKED";
+    throw error;
+  }
+  return grant;
+}
+
+function uiImageResult(image, structured) {
+  const metadata = {
+    mimeType: image.mimeType,
+    width: image.width,
+    height: image.height,
+    displayId: image.displayId,
+  };
+  const text = JSON.stringify(structured ?? metadata, null, 2);
+  return {
+    __mcpContent: [
+      { type: "text", text },
+      { type: "image", data: image.data, mimeType: image.mimeType },
+    ],
+    __structured: structured ?? metadata,
+  };
+}
 
 function killInFlightCommands() {
   for (const child of inFlightCommands) {
@@ -2178,7 +2432,8 @@ const federationReady = federation.start().then(() => {
 // one of the two would be unreachable in one direction and unguarded in the other.
 function advertisedTools() {
   let base = ptyAvailable ? TOOLS : TOOLS.filter((tool) => !tool.name.startsWith("pty_"));
-  if (process.platform !== "darwin") base = base.filter((tool) => !tool.name.startsWith("chrome_"));
+  if (process.platform !== "darwin") base = base.filter((tool) => !tool.name.startsWith("chrome_") && !tool.name.startsWith("ui_"));
+  if (!MAC_UI_AVAILABLE) base = base.filter((tool) => !tool.name.startsWith("ui_"));
   const federated = federation.listTools();
   return federated.length === 0 ? base : base.concat(federated);
 }
@@ -3016,10 +3271,184 @@ async function dispatchTool(name, args) {
           providerKey: BACKGROUND_CHROME_PROVIDER_KEY,
           focusPolicy: "background-only via Chrome extension; no activate/select/new foreground window",
         },
+        desktopControl: {
+          available: MAC_UI_AVAILABLE,
+          helperPath: MAC_UI_HELPER,
+          model: "Accessibility-first semantic actions with ScreenCaptureKit/CGEvent visual fallback",
+        },
         accessModel: "No bridge sandbox or path allowlist. Effective access equals the macOS account running tunnel-client/this server, subject to macOS TCC, Full Disk Access, ACLs, and sudo authentication.",
       };
       await audit(name, args, { ok: true });
       return status;
+    }
+
+    case "ui_status": {
+      const result = await callNativeUi("status", {}, { timeoutMs: 5_000 });
+      await audit(name, args, { accessibilityTrusted: result.accessibilityTrusted, screenRecordingGranted: result.screenRecordingGranted });
+      return { ...result, helperPath: MAC_UI_HELPER };
+    }
+
+    case "ui_app_list": {
+      const includeBackground = optionalBoolean(args, "include_background", false);
+      const result = await callNativeUi("apps", { include_background: includeBackground }, { timeoutMs: 5_000 });
+      await audit(name, args, { count: result.applications?.length ?? 0 });
+      return result;
+    }
+
+    case "ui_window_list": {
+      const maxWindows = optionalInteger(args, "max_windows", 300, 1, 2_000);
+      const onScreenOnly = optionalBoolean(args, "on_screen_only", true);
+      const result = await callNativeUi("windows", { max_windows: maxWindows, on_screen_only: onScreenOnly }, { timeoutMs: 5_000 });
+      await audit(name, args, { count: result.windows?.length ?? 0 });
+      return result;
+    }
+
+    case "ui_tree": {
+      const payload = {
+        ...(args?.pid === undefined ? {} : { pid: requireInteger(args, "pid", 1, 2_147_483_647) }),
+        max_depth: optionalInteger(args, "max_depth", 8, 0, 20),
+        max_elements: optionalInteger(args, "max_elements", 500, 1, 5_000),
+        include_values: optionalBoolean(args, "include_values", true),
+      };
+      const result = await callNativeUi("tree", payload, { timeoutMs: 10_000 });
+      await audit(name, args, { pid: result.pid, elementCount: result.elementCount, truncated: result.truncated });
+      return result;
+    }
+
+    case "ui_screenshot": {
+      const payload = {
+        ...(args?.display_id === undefined ? {} : { display_id: requireInteger(args, "display_id", 0, 0xffffffff) }),
+        max_width: optionalInteger(args, "max_width", 1_600, 320, 6_144),
+        max_height: optionalInteger(args, "max_height", 1_600, 240, 6_144),
+        format: optionalString(args, "format", "jpeg"),
+        quality: typeof args?.quality === "number" ? args.quality : 0.78,
+        include_cursor: optionalBoolean(args, "include_cursor", false),
+      };
+      const image = await callNativeUi("screenshot", payload, { timeoutMs: 20_000, maxBytes: 24_000_000 });
+      const metadata = { mimeType: image.mimeType, width: image.width, height: image.height, displayId: image.displayId };
+      await audit(name, args, metadata);
+      return uiImageResult(image, metadata);
+    }
+
+    case "ui_observe": {
+      const treePayload = {
+        ...(args?.pid === undefined ? {} : { pid: requireInteger(args, "pid", 1, 2_147_483_647) }),
+        max_depth: optionalInteger(args, "max_depth", 8, 0, 20),
+        max_elements: optionalInteger(args, "max_elements", 500, 1, 5_000),
+        include_values: optionalBoolean(args, "include_values", true),
+      };
+      const status = await callNativeUi("status", {}, { timeoutMs: 5_000 });
+      const tree = await callNativeUi("tree", treePayload, { timeoutMs: 10_000 });
+      const includeScreenshot = optionalBoolean(args, "include_screenshot", true);
+      if (!includeScreenshot) {
+        const result = { status, tree };
+        await audit(name, args, { pid: tree.pid, elementCount: tree.elementCount, screenshot: false });
+        return result;
+      }
+      const imagePayload = {
+        ...(args?.display_id === undefined ? {} : { display_id: requireInteger(args, "display_id", 0, 0xffffffff) }),
+        max_width: optionalInteger(args, "max_width", 1_600, 320, 6_144),
+        max_height: optionalInteger(args, "max_height", 1_600, 240, 6_144),
+        format: "jpeg",
+        quality: 0.78,
+        include_cursor: false,
+      };
+      const image = await callNativeUi("screenshot", imagePayload, { timeoutMs: 20_000, maxBytes: 24_000_000 });
+      const structured = {
+        status,
+        tree,
+        screenshot: { mimeType: image.mimeType, width: image.width, height: image.height, displayId: image.displayId },
+      };
+      await audit(name, args, { pid: tree.pid, elementCount: tree.elementCount, screenshot: true, width: image.width, height: image.height });
+      return uiImageResult(image, structured);
+    }
+
+    case "ui_app_launch": {
+      const launchArgs = {
+        ...(typeof args?.path === "string" ? { path: args.path } : {}),
+        ...(typeof args?.bundle_id === "string" ? { bundle_id: args.bundle_id } : {}),
+        ...(typeof args?.name === "string" ? { name: args.name } : {}),
+        activate: optionalBoolean(args, "activate", true),
+      };
+      if (!launchArgs.path && !launchArgs.bundle_id && !launchArgs.name) throw new Error("ui_app_launch requires path, bundle_id, or name");
+      if (launchArgs.activate) await requireNativeUiApproval(name, launchArgs);
+      const result = await callNativeUi("app_launch", launchArgs, { timeoutMs: 20_000 });
+      await audit(name, args, { pid: result.pid, app: result.name, activated: launchArgs.activate });
+      return result;
+    }
+
+    case "ui_app_activate": {
+      const activateArgs = {
+        ...(args?.pid === undefined ? {} : { pid: requireInteger(args, "pid", 1, 2_147_483_647) }),
+        ...(typeof args?.bundle_id === "string" ? { bundle_id: args.bundle_id } : {}),
+        ...(typeof args?.name === "string" ? { name: args.name } : {}),
+      };
+      if (!activateArgs.pid && !activateArgs.bundle_id && !activateArgs.name) throw new Error("ui_app_activate requires pid, bundle_id, or name");
+      await requireNativeUiApproval(name, activateArgs);
+      const result = await callNativeUi("app_activate", activateArgs, { timeoutMs: 10_000 });
+      await audit(name, args, { pid: result.pid, app: result.name });
+      return result;
+    }
+
+    case "ui_action": {
+      const ref = requireString(args, "ref");
+      const action = requireString(args, "action");
+      const actionArgs = {
+        ref,
+        action,
+        ...(args?.value === undefined ? {} : { value: requireString(args, "value", { allowEmpty: true }) }),
+      };
+      if (typeof actionArgs.value === "string" && actionArgs.value.length > 500_000) throw new Error("'value' must be at most 500000 characters");
+      await requireNativeUiApproval(name, actionArgs);
+      const result = await callNativeUi("action", actionArgs, { timeoutMs: 10_000 });
+      await audit(name, args, { ref, action, performed: result.performed });
+      return result;
+    }
+
+    case "ui_mouse": {
+      const action = requireString(args, "action");
+      const payload = { action };
+      for (const key of ["x", "y", "delta_x", "delta_y"]) {
+        if (args?.[key] !== undefined) {
+          if (typeof args[key] !== "number" || !Number.isFinite(args[key])) throw new Error(`'${key}' must be a finite number`);
+          payload[key] = args[key];
+        }
+      }
+      if (["move", "click", "double_click", "right_click"].includes(action) && (payload.x === undefined || payload.y === undefined)) {
+        throw new Error(`ui_mouse action '${action}' requires x and y`);
+      }
+      await requireNativeUiApproval(name, payload);
+      const result = await callNativeUi("mouse", payload, { timeoutMs: 10_000 });
+      await audit(name, args, { action, performed: result.performed });
+      return result;
+    }
+
+    case "ui_keyboard": {
+      const hasText = typeof args?.text === "string";
+      const hasKey = typeof args?.key === "string";
+      if (hasText === hasKey) throw new Error("ui_keyboard requires exactly one of text or key");
+      const payload = hasText
+        ? { text: requireString(args, "text", { allowEmpty: true }) }
+        : { key: requireString(args, "key"), modifiers: optionalStringArray(args, "modifiers", []) };
+      if (typeof payload.text === "string" && payload.text.length > 500_000) throw new Error("'text' must be at most 500000 characters");
+      await requireNativeUiApproval(name, payload);
+      const result = await callNativeUi("keyboard", payload, { timeoutMs: 10_000 });
+      await audit(name, args, { performed: result.performed, typedCharacters: result.typedCharacters, key: result.key });
+      return result;
+    }
+
+    case "ui_clipboard_read": {
+      const result = await callNativeUi("clipboard_read", {}, { timeoutMs: 5_000 });
+      await audit(name, {}, { changeCount: result.changeCount, stringLength: result.string?.length ?? 0 });
+      return result;
+    }
+
+    case "ui_clipboard_write": {
+      const text = requireString(args, "text", { allowEmpty: true });
+      if (text.length > 500_000) throw new Error("'text' must be at most 500000 characters");
+      const result = await callNativeUi("clipboard_write", { text }, { timeoutMs: 5_000 });
+      await audit(name, args, { changeCount: result.changeCount, writtenCharacters: result.writtenCharacters });
+      return result;
     }
 
     case "chrome_workspace_status": {
@@ -3840,7 +4269,7 @@ async function handleMessage(message) {
       resultType: "complete",
       supportedVersions: [MODERN_PROTOCOL, "2025-11-25", "2025-06-18"],
       capabilities: { tools: { listChanged: false } },
-      instructions: "This bridge has unrestricted access under the host macOS user. Prefer codex_thread_read over invoking Codex model turns. Use shell_start for long-running commands. Relaxed access is the default: routine HTTP/HTTPS work through the signed-in MDB Chrome workspace and non-Chrome foreground desktop-app control do not require per-site/per-app approval files. Direct Chrome AppleScript/JXA, direct Chrome executable launches, and shell web-open commands are always blocked in both Relaxed and Strict modes; Chrome web work must use the chrome_* MDB background tools. Prefer background browser/API paths so the operator keeps focus. If the operator enables Strict approvals in the menu-bar app, scoped browser and non-Chrome foreground-app approvals are required until they turn it off. Do not print secrets unless the user explicitly requests them.",
+      instructions: "This bridge has unrestricted access under the host macOS user. Prefer codex_thread_read over invoking Codex model turns. Use shell_start for long-running commands. On macOS prefer chrome_* for normal signed-in web work, and use ui_observe/ui_tree plus semantic ui_action for native desktop work; screenshot/mouse/keyboard are visual fallbacks. Direct Chrome AppleScript/JXA, direct Chrome executable launches, and shell web-open commands remain blocked, but ui_* may operate foreground browser/OS UI when the background extension cannot. Relaxed access is the default. If the operator enables Strict approvals, scoped browser grants and one-use app-scoped native mutation approvals are required. Do not print secrets unless the user explicitly requests them.",
       ttlMs: 3_600_000,
       cacheScope: "private",
       _meta: resultMeta(),
@@ -3859,7 +4288,7 @@ async function handleMessage(message) {
       protocolVersion: negotiatedProtocol,
       capabilities: { tools: { listChanged: false } },
       serverInfo: serverInfo(),
-      instructions: "This bridge runs without a filesystem sandbox or command allowlist. Effective permissions equal the macOS user running it. Prefer codex_thread_read for persisted Codex history without model usage. On macOS, use the MDB chrome_* background workspace for normal logged-in web work and prefer APIs/connectors over native UI automation. Direct Chrome AppleScript/JXA, direct Chrome executable launches, and shell web-open commands are always refused so Chrome cannot bypass the MDB group or steal focus. Relaxed access is the default and removes approval ceremony; Strict approvals is an operator-controlled optional mode for URL scopes and non-Chrome foreground apps.",
+      instructions: "This bridge runs without a filesystem sandbox or command allowlist. Effective permissions equal the macOS user running it. Prefer codex_thread_read for persisted Codex history without model usage. On macOS, prefer the MDB chrome_* background workspace for normal logged-in web work; use ui_observe/ui_tree and semantic ui_action for native desktop/OS UI, with screenshot/mouse/keyboard as fallback. Direct shell/AppleScript Chrome routes are refused, while the dedicated ui_* surface can operate foreground UI when necessary. Relaxed access is the default; Strict approvals adds URL scopes and one-use app-scoped native mutation approvals.",
     });
     return;
   }
@@ -3920,9 +4349,9 @@ async function handleMessage(message) {
     }
     try {
       const value = await dispatchTool(name, args);
-      // Discriminated escape for federated results. toolTextResult flattens
+      // Discriminated escape for federated and native-image results. toolTextResult flattens
       // everything into one text block plus structuredContent, which is right for
-      // the bridge's own 22 tools and destroys image, audio and resource content
+      // ordinary JSON tools and destroys image, audio and resource content
       // coming back from a child MCP server — a screenshot is two blocks, and the
       // second one is the picture. toolTextResult stays byte-identical for
       // everything that is not a federated result.

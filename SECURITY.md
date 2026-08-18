@@ -227,11 +227,37 @@ The extension requests `tabs`, `tabGroups`, `storage`, `scripting`, `nativeMessa
 
 Some browser actions cannot be made reliable in the background without defeating Chrome's security model. CAPTCHAs, passkeys, native permission prompts, downloads requiring trusted user gestures, file pickers, and similar browser/OS UI may require the human to foreground Chrome. The background tools report that boundary instead of silently activating the browser.
 
+## Native desktop-control helper
+
+The private desktop-control line adds `MacUIHelper`, a Swift executable used by the built-in `ui_*` tools. P0 deliberately does **not** run it as a daemon: `bridge.mjs` starts one detached helper process for a tool call, bounds its output/time, tracks it in the same in-flight process set as foreground shell commands, and reclaims its process group on bridge revocation or teardown.
+
+The helper receives only a small environment allowlist (`PATH`, `HOME`, temporary-directory/user/locale/terminal variables). Bridge, tunnel, cloud, and other ambient credentials are not intentionally inherited by the helper.
+
+The authority is large:
+
+- Accessibility (`AXUIElement`) can inspect visible/control metadata and perform supported UI actions.
+- ScreenCaptureKit can expose anything visible on a captured display, including sensitive data not present in the Accessibility tree.
+- CoreGraphics input can synthesize mouse and keyboard events into the logged-in desktop session.
+- Clipboard tools can read or replace general-pasteboard text.
+- Application launch/activation can change foreground focus.
+
+macOS TCC remains outside the bridge's control. Accessibility and Screen Recording permissions must be granted by the operator to the responsible application/process chain. The helper reports permission state and fails closed when a required permission is absent; it does not edit TCC databases.
+
+AX values whose role/subrole indicates a secure field are redacted from `ui_tree`. This is not a complete secret boundary: screenshots, clipboard reads, application titles, non-secure text fields, and other UI-visible state can still contain sensitive data.
+
+Input text is treated specially by the local audit layer. `ui_keyboard.text`, `ui_clipboard_write.text`, and `ui_action` values for `set_value` are replaced with byte-count/SHA-256 correlation markers before any audit serialization, including `MAC_DEV_BRIDGE_AUDIT_MODE=full`.
+
+P0 AX references are ephemeral and include a 64-bit fingerprint: `ax:<pid>:<child.path>:<fingerprint>`. Before any semantic action, the helper re-resolves the path and recomputes identity from role, subrole, identifier, title, description, and frame. Missing paths and mismatches fail with `UI_ELEMENT_STALE`, preventing a reordered tree from silently redirecting the action to a different-looking control. This is a correctness guard, not a cryptographic security boundary; callers should still re-observe around consequential UI changes.
+
+Strict approvals covers the dedicated native mutation tools as well as detected shell/AppleScript foreground actions. When Strict mode is enabled, `ui_app_activate`, activating `ui_app_launch`, `ui_action`, `ui_mouse`, and `ui_keyboard` consume the existing one-use app-scoped foreground grant. Relaxed mode permits them directly. As elsewhere in this project, this is an operator-drift control rather than a sandbox against an already-authorized unrestricted shell.
+
+Chrome's background extension remains the preferred path for ordinary web-page work. The private full-control `ui_*` surface is intentionally capable of operating a **foreground** Chrome window when OS/browser UI or another visual surface cannot be handled through the background extension. Consequently the stronger upstream statement that Chrome GUI automation is structurally background-only applies to `shell_exec`/`shell_start` routing, not to the new full-desktop input surface.
+
 ## Background-first desktop GUI policy
 
 Native macOS Accessibility/AppleScript/JXA automation is different from the Chrome extension path. Driving Slack, Finder, System Settings, or another desktop app can inherently require that app to become frontmost. Mac Developer Bridge cannot generically make such UI scripting invisible without changing what operation is being performed.
 
-`MAC_DEV_BRIDGE_GUI_FOCUS_POLICY=background-first` remains the routing preference: use background browser/API paths first. In relaxed approval mode, non-Chrome native GUI control is allowed without an additional approval file when execution genuinely requires it. Chrome is always background-only through the `MDB` extension path as described above. If the operator turns on **Strict approvals**, `shell_exec` and `shell_start` additionally block detected foreground GUI automation for other apps until a single-use, app-scoped, maximum-five-minute grant from `scripts/approve-foreground-gui.sh` is consumed. A model-supplied environment variable does not disable Strict mode.
+`MAC_DEV_BRIDGE_GUI_FOCUS_POLICY=background-first` remains the routing preference: use background browser/API paths first. In relaxed approval mode, native GUI control is allowed without an additional approval file when execution genuinely requires it. Direct Chrome automation through `shell_exec`/`shell_start` remains forced through the background extension; the private `ui_*` desktop surface is a separate foreground-capable fallback. If the operator turns on **Strict approvals**, detected shell GUI actions and dedicated native mutation tools consume a single-use, app-scoped, maximum-five-minute grant from `scripts/approve-foreground-gui.sh`. A model-supplied environment variable does not disable Strict mode.
 
 Prefer an API/MCP connector first, then the service's web UI through the signed-in `MDB` Chrome group, before native GUI scripting. For example, Slack Web can be automated through the background Chrome path while native Slack Accessibility scripting cannot reliably stay in the background.
 

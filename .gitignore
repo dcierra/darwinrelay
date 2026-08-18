@@ -26,3 +26,6 @@ http-token
 # Runtime output
 *.log
 *.pid
+
+# Local native desktop-control build product
+/bin/MacUIHelper

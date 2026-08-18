@@ -10,6 +10,8 @@
 // per-call latch refuses anything already in flight.
 
 import AppKit
+import ApplicationServices
+import CoreGraphics
 
 // MARK: - Paths and shell resolution
 
@@ -291,6 +293,7 @@ final class Controller: NSObject, NSApplicationDelegate {
     private let tunnelModeMenuItem = NSMenuItem(title: "Tunnel: —", action: nil, keyEquivalent: "")
     private let startStopItem = NSMenuItem(title: "Start", action: nil, keyEquivalent: "")
     private let strictApprovalsItem = NSMenuItem(title: "Strict approvals", action: nil, keyEquivalent: "")
+    private let desktopPermissionsItem = NSMenuItem(title: "Desktop: checking permissions…", action: nil, keyEquivalent: "")
 
     /// Reclaim anything a previous instance left behind.
     ///
@@ -469,8 +472,13 @@ final class Controller: NSObject, NSApplicationDelegate {
 
         strictApprovalsItem.target = self
         strictApprovalsItem.action = #selector(toggleStrictApprovals)
-        strictApprovalsItem.toolTip = "Off by default: MDB can use the signed-in Chrome profile and non-Chrome foreground apps without per-site/per-app approval files. Chrome still stays background-only through the MDB tab group. Turn this on to require short-lived scoped approvals."
+        strictApprovalsItem.toolTip = "Off by default: MDB can use the signed-in Chrome profile and foreground desktop tools without per-site/per-app approval files. Turn this on to require short-lived scoped approvals."
         menu.addItem(strictApprovalsItem)
+
+        desktopPermissionsItem.target = self
+        desktopPermissionsItem.action = #selector(openDesktopPermissions)
+        desktopPermissionsItem.toolTip = "Accessibility drives native controls; Screen Recording captures pixels; Full Disk Access affects protected filesystem paths. Click to open Privacy & Security."
+        menu.addItem(desktopPermissionsItem)
 
         let regen = NSMenuItem(title: "Rotate Token…", action: #selector(rotateToken), keyEquivalent: "")
         regen.target = self
@@ -542,6 +550,12 @@ final class Controller: NSObject, NSApplicationDelegate {
         }
         strictApprovalsItem.state = OperatorSettingsStore.strictApprovals() ? .on : .off
         strictApprovalsItem.title = "Strict approvals"
+
+        let ax = AXIsProcessTrusted()
+        let screen = CGPreflightScreenCaptureAccess()
+        let fda = fullDiskAccessGranted()
+        func mark(_ granted: Bool) -> String { granted ? "✓" : "✗" }
+        desktopPermissionsItem.title = "Desktop: AX \(mark(ax)) · Screen \(mark(screen)) · FDA \(mark(fda))"
     }
 
     // MARK: Actions
@@ -646,6 +660,24 @@ final class Controller: NSObject, NSApplicationDelegate {
         render()
     }
 
+    private func fullDiskAccessGranted() -> Bool {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let probe = URL(fileURLWithPath: home + "/Library/Application Support/com.apple.TCC/TCC.db")
+        do {
+            let handle = try FileHandle(forReadingFrom: probe)
+            _ = try handle.read(upToCount: 1)
+            try? handle.close()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    @objc private func openDesktopPermissions() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     @objc private func openLogs() {
         NSWorkspace.shared.selectFile(Paths.httpLog, inFileViewerRootedAtPath: Paths.logDir)
     }
@@ -719,7 +751,7 @@ final class Controller: NSObject, NSApplicationDelegate {
             // port comes from there rather than being passed here.
             tunnel.arguments = ["tunnel", "--no-autoupdate", "run", named.name]
         } else {
-            tunnel.arguments = ["tunnel", "--url", "http://127.0.0.1:\(httpPort)", "--no-autoupdate"]
+            tunnel.arguments = ["tunnel", "--protocol", "http2", "--url", "http://127.0.0.1:\(httpPort)", "--no-autoupdate"]
         }
         tunnel.environment = childEnvironment(publicURL: nil)
         let pipe = Pipe()

@@ -148,6 +148,19 @@ fi
 chmod +x "$INSTALL_DIR/bridge.mjs" "$INSTALL_DIR/mcp-http.mjs" "$INSTALL_DIR/install.sh" "$INSTALL_DIR/uninstall.sh" "$INSTALL_DIR/scripts/"*.sh
 ln -sfn "$INSTALL_DIR/bridge.mjs" "$BIN_DIR/mac-developer-bridge"
 
+# Native desktop control is optional for the portable bridge, but on macOS with
+# Swift tooling available we build it automatically. Failure does not weaken the
+# existing terminal/filesystem bridge; ui_* tools simply stay unadvertised.
+if command -v xcrun >/dev/null 2>&1 && command -v swiftc >/dev/null 2>&1; then
+  if MAC_DEV_BRIDGE_UI_HELPER_OUTPUT="$INSTALL_DIR/bin/MacUIHelper" "$INSTALL_DIR/scripts/build-mac-ui-helper.sh" >/dev/null; then
+    say "Built native desktop-control helper."
+  else
+    warn "Note: native desktop-control helper failed to build; terminal/filesystem tools remain available."
+  fi
+else
+  warn "Note: Swift/Xcode Command Line Tools are unavailable; native ui_* tools will not be advertised."
+fi
+
 say "Validating bridge protocol and host operations..."
 "$NODE_BIN" --check "$INSTALL_DIR/bridge.mjs"
 "$NODE_BIN" --check "$INSTALL_DIR/mcp-http.mjs"

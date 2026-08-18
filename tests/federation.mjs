@@ -1045,6 +1045,11 @@ exec ${realPgrep} "$@"
         env: {
           ...process.env,
           PATH: `${fakeBin}:${process.env.PATH || "/usr/bin:/bin"}`,
+          // Regression for the kill-switch locale bug: macOS localizes
+          // `ps -o lstart`, while disable.sh historically parsed only English
+          // `%a %b ...` names and silently skipped live recorded process groups.
+          LANG: "ru_RU.UTF-8",
+          LC_ALL: "",
           MAC_DEV_BRIDGE_DATA_DIR: dataDir,
           MAC_DEV_BRIDGE_UNLOCK_FILE: path.join(dataDir, "FULL_ACCESS_ENABLED"),
           // Critical isolation: never let disable.sh resolve bridge.mjs or
