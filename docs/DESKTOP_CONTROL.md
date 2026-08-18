@@ -173,4 +173,4 @@ The desktop layer has two test tiers:
 1. deterministic protocol tests with a fake helper — tool advertisement, native image passthrough, observation binding, Strict approvals and audit redaction;
 2. a real AppKit fixture — semantic set/press + postconditions, AX waits/assertions, ScreenCaptureKit window capture, Vision OCR, window geometry changes, native dialogs, visual-change waits, drag/drop, NSOpenPanel and NSSavePanel.
 
-The native fixture test builds everywhere on macOS and automatically skips the runtime portion when CI does not grant Accessibility/Screen Recording.
+The native fixture test builds everywhere on macOS and automatically skips the runtime portion when CI does not grant Accessibility/Screen Recording. Hosted GitHub macOS can expose those APIs while refusing to deliver synthesized `CGEvent` pointer input into AppKit controls; there CI verifies drag event construction/coordinate routing, while an interactive Mac additionally requires the slider's visible value to change.
