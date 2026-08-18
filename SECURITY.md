@@ -229,15 +229,17 @@ Some browser actions cannot be made reliable in the background without defeating
 
 ## Native desktop-control helper
 
-The private desktop-control line adds `MacUIHelper`, a Swift executable used by the built-in `ui_*` tools. P0 deliberately does **not** run it as a daemon: `bridge.mjs` starts one detached helper process for a tool call, bounds its output/time, tracks it in the same in-flight process set as foreground shell commands, and reclaims its process group on bridge revocation or teardown.
+The private desktop-control line adds `MacUIHelper`, a Swift executable used by the built-in `ui_*` tools. It deliberately does **not** run as a daemon: `bridge.mjs` starts one detached helper process for a tool call, bounds its output/time, tracks it in the same in-flight process set as foreground shell commands, and reclaims its process group on bridge revocation or teardown.
 
 The helper receives only a small environment allowlist (`PATH`, `HOME`, temporary-directory/user/locale/terminal variables). Bridge, tunnel, cloud, and other ambient credentials are not intentionally inherited by the helper.
 
 The authority is large:
 
 - Accessibility (`AXUIElement`) can inspect visible/control metadata and perform supported UI actions.
-- ScreenCaptureKit can expose anything visible on a captured display, including sensitive data not present in the Accessibility tree.
-- CoreGraphics input can synthesize mouse and keyboard events into the logged-in desktop session.
+- ScreenCaptureKit can expose anything visible on a captured display/window/region, including sensitive data not present in the Accessibility tree.
+- Vision OCR turns captured pixels into model-readable text and bounds; it does not reduce the sensitivity of the underlying screenshot.
+- CoreGraphics input can synthesize mouse, keyboard, and drag events into the logged-in desktop session across displays.
+- Window/dialog/file-panel tools can move/resize/minimize/close windows and confirm native Open/Save dialogs.
 - Clipboard tools can read or replace general-pasteboard text.
 - Application launch/activation can change foreground focus.
 
@@ -247,9 +249,13 @@ AX values whose role/subrole indicates a secure field are redacted from `ui_tree
 
 Input text is treated specially by the local audit layer. `ui_keyboard.text`, `ui_clipboard_write.text`, and `ui_action` values for `set_value` are replaced with byte-count/SHA-256 correlation markers before any audit serialization, including `MAC_DEV_BRIDGE_AUDIT_MODE=full`.
 
-P0 AX references are ephemeral and include a 64-bit fingerprint: `ax:<pid>:<child.path>:<fingerprint>`. Before any semantic action, the helper re-resolves the path and recomputes identity from role, subrole, identifier, title, description, and frame. Missing paths and mismatches fail with `UI_ELEMENT_STALE`, preventing a reordered tree from silently redirecting the action to a different-looking control. This is a correctness guard, not a cryptographic security boundary; callers should still re-observe around consequential UI changes.
+AX references are ephemeral and include a 64-bit fingerprint: `ax:<pid>:<child.path>:<fingerprint>`. Before semantic mutation, the helper re-resolves the path and recomputes identity from role, subrole, identifier, title, description, and frame. If only the AX child indices changed, it performs a bounded search for the exact fingerprint and accepts recovery only when there is exactly one match. Changed, missing, or ambiguous identities fail with `UI_ELEMENT_STALE`. `ui_tree`/`ui_observe` additionally issue an in-memory 60-second observation id (bounded to 64 generations); mutation calls can require the ref to have existed in that observation. `ui_action.precondition` rechecks semantic properties immediately before mutation and `ui_action.verify` performs a bounded postcondition wait. These are correctness controls, not cryptographic/security boundaries against same-user code.
 
-Strict approvals covers the dedicated native mutation tools as well as detected shell/AppleScript foreground actions. When Strict mode is enabled, `ui_app_activate`, activating `ui_app_launch`, `ui_action`, `ui_mouse`, and `ui_keyboard` consume the existing one-use app-scoped foreground grant. Relaxed mode permits them directly. As elsewhere in this project, this is an operator-drift control rather than a sandbox against an already-authorized unrestricted shell.
+Strict approvals covers all dedicated native mutation tools as well as detected shell/AppleScript foreground actions. When Strict mode is enabled, application activation/launch, semantic actions, pointer/keyboard/drag input, window actions, dialog actions, and file-panel actions consume the existing one-use app-scoped foreground grant. Relaxed mode permits them directly. As elsewhere in this project, this is an operator-drift control rather than a sandbox against an already-authorized unrestricted shell.
+
+Display/window/region coordinates use Quartz global display space. Explicit display-local routing is translated by the helper. This is a correctness convention, not isolation: a coordinate action can affect whichever UI occupies that location when it is emitted, so semantic refs plus re-observation are preferred whenever Accessibility exposes the target.
+
+`ui_file_dialog` is intentionally scoped to Apple's standard NSSavePanel/NSOpenPanel behavior. It does not bypass file permissions, sandbox/TCC checks, or application-specific authorization UI; it only navigates and confirms the same panel visible in the logged-in session.
 
 Chrome's background extension remains the preferred path for ordinary web-page work. The private full-control `ui_*` surface is intentionally capable of operating a **foreground** Chrome window when OS/browser UI or another visual surface cannot be handled through the background extension. Consequently the stronger upstream statement that Chrome GUI automation is structurally background-only applies to `shell_exec`/`shell_start` routing, not to the new full-desktop input surface.
 

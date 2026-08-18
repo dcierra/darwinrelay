@@ -77,9 +77,10 @@ Mac Developer Bridge is released under the [MIT License](LICENSE). Bug reports a
 - Unified-diff application through `git apply`
 - Stored Codex thread discovery and reading without resuming a thread or starting a Codex model turn
 - Paginated Codex turn retrieval for histories too large for a single response
-- Native macOS desktop observation through Accessibility (`AXUIElement`) plus ScreenCaptureKit screenshots
-- Semantic native UI actions, application launch/activation, CoreGraphics mouse/keyboard fallback, and clipboard access
-- Native screenshot results returned as MCP image content rather than base64 text blobs
+- Native macOS desktop observation through Accessibility/AXObserver plus display, window, and region ScreenCaptureKit screenshots
+- Semantic AX actions with observation binding, preconditions and bounded post-action verification
+- Native window management, drag/drop, rich keyboard input, dialog/open-save-panel handling, Vision OCR and visual-change waits
+- Canonical multi-display Quartz coordinates and native screenshot results returned as MCP image content rather than base64 text blobs
 - Short-lived native helper processes rather than a resident desktop-control daemon
 - Local JSONL auditing
 - Outbound-only private connectivity through OpenAI Secure MCP Tunnel, or a plain-HTTP loopback front end that Cloudflare Tunnel publishes over HTTPS
@@ -94,17 +95,26 @@ Git, package managers, Vercel CLI, database CLIs, AppleScript, browser CLIs, bui
 | Tool | Purpose |
 |---|---|
 | `bridge_status` | Runtime identity, paths, permissions context, shell, audit mode, Codex binary, focus policy, and background-Chrome status |
-| `ui_status` | Inspect Accessibility/Screen Recording readiness, frontmost application, and displays |
+| `ui_status` | Inspect Accessibility/Screen Recording readiness and canonical display geometry |
 | `ui_app_list` | List running macOS applications |
-| `ui_window_list` | List CoreGraphics windows and bounds |
-| `ui_tree` | Read a bounded Accessibility tree with ephemeral semantic element refs |
-| `ui_screenshot` | Capture a display through ScreenCaptureKit and return native MCP image content |
-| `ui_observe` | Return status + AX tree + optional screenshot as one computer-use observation |
-| `ui_app_launch` | Launch a native application by path, bundle id, or name |
-| `ui_app_activate` | Bring a running native application to the foreground |
-| `ui_action` | Perform a semantic AX action such as press, focus, or set value |
-| `ui_mouse` | Move/click/right-click/double-click/scroll using CoreGraphics events |
-| `ui_keyboard` | Type Unicode text or send supported hotkeys using CoreGraphics events |
+| `ui_window_list` | List CoreGraphics windows, bounds, and display routing |
+| `ui_tree` | Read a bounded AX tree with fingerprinted refs and an expiring observation id |
+| `ui_screenshot` | Capture a display, window, or region as native MCP image content |
+| `ui_observe` | Return status + AX tree + optional targeted screenshot |
+| `ui_wait_for` | Wait for semantic AX state with AXObserver-assisted bounded polling |
+| `ui_assert` | Assert semantic AX state immediately |
+| `ui_ocr` | Run Apple Vision OCR over a display/window/region |
+| `ui_wait_visual` | Wait for pixel change or visual stability without streaming frames |
+| `ui_app_launch` | Launch an application by path, bundle id, or name |
+| `ui_app_activate` | Bring a running application to the foreground |
+| `ui_action` | Perform semantic AX actions with optional precondition and postcondition verification |
+| `ui_window_action` | Focus/move/resize/minimize/restore/full-screen/close a native window |
+| `ui_mouse` | Move/click/right-click/double-click/scroll/drag using Quartz coordinates |
+| `ui_drag_drop` | Drag between semantic refs or explicit coordinates |
+| `ui_keyboard` | Type Unicode or send named/raw virtual keys, modifiers and key phases |
+| `ui_dialogs` | Inspect native sheets/system dialogs and buttons |
+| `ui_dialog_action` | Press default/cancel/named native dialog buttons |
+| `ui_file_dialog` | Navigate and confirm standard native open/save panels by absolute path |
 | `ui_clipboard_read` | Read the general pasteboard string/types |
 | `ui_clipboard_write` | Replace the general pasteboard with text |
 | `chrome_workspace_status` | Inspect the extension-owned `MDB` Chrome group and reusable background-tab pool; no website grant required |
@@ -134,43 +144,27 @@ Git, package managers, Vercel CLI, database CLIs, AppleScript, browser CLIs, bui
 
 ### Native desktop control
 
-This private line adds a small Swift helper, `MacUIHelper`, for native computer use. It is built from `desktop-helper/MacUIHelper.swift` and invoked as a **short-lived process per tool call**. There is no resident GUI-control daemon in this P0 implementation.
+The private line builds `MacUIHelper` from Swift sources under `desktop-helper/`. The helper is a bounded **short-lived process per tool call** using AppKit, Accessibility/AXObserver, ScreenCaptureKit, CoreGraphics, Vision and NSPasteboard. It is advertised only on macOS when the executable is available; a failed helper build leaves the original shell/filesystem/PTY/browser bridge usable.
 
-The observation/action order is deliberate:
+The preferred workflow is semantic-first: `ui_observe`/`ui_tree` → fingerprinted AX ref → `ui_action(precondition=..., verify=...)` → `ui_wait_for`/`ui_assert`. Each observation carries a short-lived in-memory `observationId`; callers can bind consequential actions to refs that were actually present in that observation. If AppKit only re-indexes child arrays, the helper can recover a ref by finding exactly one unchanged fingerprint; changed, missing, or ambiguous targets fail as `UI_ELEMENT_STALE`. Mismatched semantic preconditions fail as `UI_PRECONDITION_FAILED`, and failed postconditions as `UI_POSTCONDITION_FAILED`.
 
-1. Use `ui_observe` / `ui_tree` to obtain semantic Accessibility state.
-2. Prefer `ui_action` against the returned AX ref when the target exposes an Accessibility action.
-3. Use `ui_keyboard` or application shortcuts when semantic action is unavailable.
-4. Use `ui_screenshot` + `ui_mouse` only as the visual/coordinate fallback for canvas, RDP, custom-rendered controls, or other poor Accessibility surfaces.
-5. Observe again after state-changing actions instead of assuming they succeeded.
+For poor-Accessibility surfaces such as RDP/canvas/custom renderers, use targeted `ui_screenshot` or local `ui_ocr`, then `ui_mouse`/`ui_drag_drop`/`ui_keyboard`, followed by `ui_wait_visual` or a new observation. Screenshots can target a display, desktop-independent window, or region. Pointer/region coordinates use Quartz global display space; explicit display ids allow display-local coordinates on multi-monitor setups.
 
-`ui_observe` is the primary computer-use primitive. By default it returns the frontmost application's bounded AX tree and a scaled display screenshot. Screenshot data is returned as MCP `image` content, while the structured result contains the tree and compact image metadata.
+Window control and native panels are first-class: `ui_window_action` handles focus/geometry/minimize/full-screen/close, while `ui_dialogs`, `ui_dialog_action`, and `ui_file_dialog` handle standard native sheets and NSOpenPanel/NSSavePanel flows. A deterministic AppKit fixture exercises these operations locally.
 
-Build the helper directly without rebuilding or installing the menu-bar application:
+Build/check the native pieces without installing the menu-bar app:
 
 ```bash
 ./scripts/build-mac-ui-helper.sh
 ./scripts/check-mac-ui-helper.sh
+./scripts/build-desktop-fixture.sh
 ```
 
-The `ui_*` tools are advertised only on macOS and only when an executable helper is available. `install.sh` attempts to build it when Swift/Xcode Command Line Tools are present; failure leaves the existing shell/filesystem bridge usable and simply keeps `ui_*` absent.
+macOS TCC remains authoritative. The helper never edits TCC; Accessibility and Screen Recording are required for their respective capabilities. The menu-bar app displays AX/Screen/FDA readiness. Text supplied to `ui_keyboard`, `ui_clipboard_write`, and AX `set_value` is never written verbatim to the MDB audit log.
 
-macOS privacy controls remain real boundaries. Accessibility is required for AX inspection and input synthesis, and Screen Recording is required for screenshots. The helper reports those states through `ui_status`; it does not attempt to modify the TCC database.
-The private menu-bar source also shows a compact `Desktop: AX ✓/✗ · Screen ✓/✗ · FDA ✓/✗` status and links to Privacy & Security; it is observational only and does not grant permissions.
+The helper intentionally remains short-lived: measured startup on the development M4 host was ~50 ms median / ~56 ms p95 after warmup, so a resident daemon would add lifecycle and kill-switch complexity without a material benefit.
 
-Native input can take over the operator's foreground UI. Relaxed approvals (the default) permits that because this bridge is explicitly an unrestricted local operator. With **Strict approvals** enabled, state-changing native tools consume the same one-use, app-scoped foreground approval mechanism used for detected shell/AppleScript GUI control.
-
-Text passed to `ui_keyboard`, `ui_clipboard_write`, and `ui_action(action="set_value")` is never stored verbatim in the MDB audit log, even with `MAC_DEV_BRIDGE_AUDIT_MODE=full`; the audit keeps only length/hash correlation data. `ui_clipboard_read`, screenshots, and AX observations can still expose sensitive user-visible content to the model, which is inherent to desktop observation.
-
-Current P0 limitations are intentional and documented rather than hidden:
-
-- AX refs are ephemeral and fingerprinted (`ax:<pid>:<child.path>:<fingerprint>`). Before an action, the helper re-resolves the path and verifies role/subrole/identifier/title/description/frame identity; a missing path or mismatch fails as `UI_ELEMENT_STALE`. Legitimate layout/title changes can therefore require a fresh observation.
-- Screenshot capture currently targets displays, not individual windows/regions.
-- There is no `ui_wait_for` / AXObserver event primitive yet; callers re-observe explicitly.
-- Mouse drag, arbitrary virtual-key mapping, native window move/resize, OCR, and file-picker-specific helpers remain P1/P2 work.
-- Login/lock screens, Secure Input, passkeys, and security-sensitive OS UI remain subject to macOS restrictions and cannot be promised as automatable.
-
-See [`docs/DESKTOP_CONTROL.md`](docs/DESKTOP_CONTROL.md) for the architecture and implementation roadmap.
+See [`docs/DESKTOP_CONTROL.md`](docs/DESKTOP_CONTROL.md) for the complete native-control contract and safety model.
 
 ### Background Chrome without stealing focus
 

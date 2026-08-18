@@ -79,17 +79,7 @@ func runningAppDictionary(_ app: NSRunningApplication) -> [String: Any] {
 }
 
 func displayDictionaries() -> [[String: Any]] {
-    NSScreen.screens.map { screen in
-        let number = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
-        return [
-            "displayId": Int(number),
-            "name": screen.localizedName,
-            "frame": rectDictionary(screen.frame),
-            "visibleFrame": rectDictionary(screen.visibleFrame),
-            "backingScaleFactor": screen.backingScaleFactor,
-            "main": number == CGMainDisplayID(),
-        ]
-    }
+    canonicalDisplayDictionaries()
 }
 
 func requireAccessibility() throws {
@@ -175,23 +165,56 @@ func elementFingerprint(_ element: AXUIElement) -> String {
     return fnv1a64([role, subrole, identifier, title, description, frame].joined(separator: "\u{1f}"))
 }
 
+func findElementsByFingerprint(pid: pid_t, expectedFingerprint: String, maxDepth: Int = 20, maxElements: Int = 5_000, maxMatches: Int = 2) -> [AXUIElement] {
+    let root = AXUIElementCreateApplication(pid)
+    var visited = 0
+    var matches: [AXUIElement] = []
+
+    func walk(_ element: AXUIElement, depth: Int) {
+        guard visited < maxElements, matches.count < maxMatches else { return }
+        visited += 1
+        if elementFingerprint(element) == expectedFingerprint {
+            matches.append(element)
+            if matches.count >= maxMatches { return }
+        }
+        guard depth < maxDepth else { return }
+        for child in axChildren(element) {
+            walk(child, depth: depth + 1)
+            if visited >= maxElements || matches.count >= maxMatches { break }
+        }
+    }
+
+    walk(root, depth: 0)
+    return matches
+}
+
 func elementAtPath(pid: pid_t, path: [Int], expectedFingerprint: String) throws -> AXUIElement {
     var current = AXUIElementCreateApplication(pid)
+    var pathValid = true
     for index in path {
         let children = axChildren(current)
         guard index >= 0 && index < children.count else {
-            throw HelperFailure(code: "UI_ELEMENT_STALE", message: "Accessibility element path is no longer valid")
+            pathValid = false
+            break
         }
         current = children[index]
     }
-    let actual = elementFingerprint(current)
-    guard actual == expectedFingerprint else {
-        throw HelperFailure(
-            code: "UI_ELEMENT_STALE",
-            message: "Accessibility element changed since observation; re-run ui_tree/ui_observe before acting"
-        )
+    if pathValid, elementFingerprint(current) == expectedFingerprint {
+        return current
     }
-    return current
+
+    // Accessibility child arrays can be re-indexed by transient AppKit controls even
+    // when the observed target itself is unchanged. Recover only the exact observed
+    // identity, and only when it is unique. A changed frame/title/role/etc. changes
+    // the fingerprint and still fails closed as UI_ELEMENT_STALE.
+    let matches = findElementsByFingerprint(pid: pid, expectedFingerprint: expectedFingerprint)
+    guard matches.count == 1, let recovered = matches.first else {
+        let reason = matches.isEmpty
+            ? "Accessibility element changed or disappeared since observation"
+            : "Accessibility element fingerprint is no longer unique"
+        throw HelperFailure(code: "UI_ELEMENT_STALE", message: "\(reason); re-run ui_tree/ui_observe before acting")
+    }
+    return recovered
 }
 
 func parseRef(_ ref: String) throws -> (pid_t, [Int], String) {
@@ -300,7 +323,7 @@ func windowList(maxWindows: Int, onScreenOnly: Bool) -> [[String: Any]] {
         let boundsRaw = window[kCGWindowBounds as String] as? [String: Any] ?? [:]
         var rect = CGRect.zero
         CGRectMakeWithDictionaryRepresentation(boundsRaw as CFDictionary, &rect)
-        return [
+        var item: [String: Any] = [
             "windowId": (window[kCGWindowNumber as String] as? NSNumber)?.intValue ?? 0,
             "ownerPid": (window[kCGWindowOwnerPID as String] as? NSNumber)?.intValue ?? 0,
             "ownerName": window[kCGWindowOwnerName as String] as? String ?? "",
@@ -311,6 +334,8 @@ func windowList(maxWindows: Int, onScreenOnly: Bool) -> [[String: Any]] {
             "memoryBytes": (window[kCGWindowMemoryUsage as String] as? NSNumber)?.intValue ?? 0,
             "bounds": rectDictionary(rect),
         ]
+        item.merge(displayRouting(for: rect)) { current, _ in current }
+        return item
     }
 }
 
@@ -415,6 +440,9 @@ func performAXAction(_ input: [String: Any]) throws -> [String: Any] {
     let ref = try stringValue(input, "ref")
     let (pid, path, fingerprint) = try parseRef(ref)
     let element = try elementAtPath(pid: pid, path: path, expectedFingerprint: fingerprint)
+    if let precondition = input["precondition"] as? [String: Any], !axElementMatches(element, selector: precondition) {
+        throw HelperFailure(code: "UI_PRECONDITION_FAILED", message: "Accessibility element no longer satisfies the requested precondition")
+    }
     let action = try stringValue(input, "action").lowercased()
 
     if action == "set_value" {
@@ -452,9 +480,9 @@ func performAXAction(_ input: [String: Any]) throws -> [String: Any] {
 func postMouse(_ input: [String: Any]) throws -> [String: Any] {
     try requireAccessibility()
     let action = try stringValue(input, "action").lowercased()
-    let x = try doubleValue(input, "x", default: 0)
-    let y = try doubleValue(input, "y", default: 0)
-    let point = CGPoint(x: x, y: y)
+    let point = (action == "scroll")
+        ? CGPoint(x: try doubleValue(input, "x", default: 0), y: try doubleValue(input, "y", default: 0))
+        : try globalPoint(input)
     switch action {
     case "move":
         CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)?.post(tap: .cghidEventTap)
@@ -474,6 +502,21 @@ func postMouse(_ input: [String: Any]) throws -> [String: Any] {
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
         }
+    case "drag":
+        let destination = CGPoint(
+            x: try doubleValue(input, "to_x"),
+            y: try doubleValue(input, "to_y")
+        )
+        let to: CGPoint
+        if let display = input["to_display_id"] as? NSNumber {
+            let bounds = try canonicalDisplayBounds(CGDirectDisplayID(display.uint32Value))
+            to = CGPoint(x: destination.x + bounds.minX, y: destination.y + bounds.minY)
+        } else {
+            to = destination
+        }
+        let duration = max(0, min(10_000, try intValue(input, "duration_ms", default: 450)))
+        try performDrag(from: point, to: to, durationMs: duration)
+        return ["action": action, "from": ["x": point.x, "y": point.y], "to": ["x": to.x, "y": to.y], "durationMs": duration, "performed": true]
     case "scroll":
         let dx = Int32(try doubleValue(input, "delta_x", default: 0))
         let dy = Int32(try doubleValue(input, "delta_y", default: 0))
@@ -484,21 +527,39 @@ func postMouse(_ input: [String: Any]) throws -> [String: Any] {
     default:
         throw HelperFailure(code: "UI_INVALID_INPUT", message: "Unsupported mouse action '\(action)'")
     }
-    return ["action": action, "x": x, "y": y, "performed": true]
+    var result: [String: Any] = ["action": action, "performed": true]
+    if action != "scroll" { result["x"] = point.x; result["y"] = point.y }
+    return result
 }
 
 func keyCode(_ name: String) -> CGKeyCode? {
-    let keys: [String: CGKeyCode] = [
-        "return": CGKeyCode(kVK_Return), "enter": CGKeyCode(kVK_Return), "tab": CGKeyCode(kVK_Tab),
-        "space": CGKeyCode(kVK_Space), "escape": CGKeyCode(kVK_Escape), "esc": CGKeyCode(kVK_Escape),
-        "delete": CGKeyCode(kVK_Delete), "backspace": CGKeyCode(kVK_Delete), "forward_delete": CGKeyCode(kVK_ForwardDelete),
-        "left": CGKeyCode(kVK_LeftArrow), "right": CGKeyCode(kVK_RightArrow), "up": CGKeyCode(kVK_UpArrow), "down": CGKeyCode(kVK_DownArrow),
-        "home": CGKeyCode(kVK_Home), "end": CGKeyCode(kVK_End), "page_up": CGKeyCode(kVK_PageUp), "page_down": CGKeyCode(kVK_PageDown),
-        "a": CGKeyCode(kVK_ANSI_A), "c": CGKeyCode(kVK_ANSI_C), "v": CGKeyCode(kVK_ANSI_V), "x": CGKeyCode(kVK_ANSI_X),
-        "z": CGKeyCode(kVK_ANSI_Z), "s": CGKeyCode(kVK_ANSI_S), "o": CGKeyCode(kVK_ANSI_O), "p": CGKeyCode(kVK_ANSI_P),
-        "f": CGKeyCode(kVK_ANSI_F), "g": CGKeyCode(kVK_ANSI_G), "l": CGKeyCode(kVK_ANSI_L), "r": CGKeyCode(kVK_ANSI_R),
+    let key = name.lowercased()
+    let keys: [String: Int] = [
+        "a": kVK_ANSI_A, "b": kVK_ANSI_B, "c": kVK_ANSI_C, "d": kVK_ANSI_D, "e": kVK_ANSI_E,
+        "f": kVK_ANSI_F, "g": kVK_ANSI_G, "h": kVK_ANSI_H, "i": kVK_ANSI_I, "j": kVK_ANSI_J,
+        "k": kVK_ANSI_K, "l": kVK_ANSI_L, "m": kVK_ANSI_M, "n": kVK_ANSI_N, "o": kVK_ANSI_O,
+        "p": kVK_ANSI_P, "q": kVK_ANSI_Q, "r": kVK_ANSI_R, "s": kVK_ANSI_S, "t": kVK_ANSI_T,
+        "u": kVK_ANSI_U, "v": kVK_ANSI_V, "w": kVK_ANSI_W, "x": kVK_ANSI_X, "y": kVK_ANSI_Y, "z": kVK_ANSI_Z,
+        "0": kVK_ANSI_0, "1": kVK_ANSI_1, "2": kVK_ANSI_2, "3": kVK_ANSI_3, "4": kVK_ANSI_4,
+        "5": kVK_ANSI_5, "6": kVK_ANSI_6, "7": kVK_ANSI_7, "8": kVK_ANSI_8, "9": kVK_ANSI_9,
+        "return": kVK_Return, "enter": kVK_Return, "tab": kVK_Tab, "space": kVK_Space,
+        "escape": kVK_Escape, "esc": kVK_Escape, "delete": kVK_Delete, "backspace": kVK_Delete,
+        "forward_delete": kVK_ForwardDelete, "left": kVK_LeftArrow, "right": kVK_RightArrow, "up": kVK_UpArrow, "down": kVK_DownArrow,
+        "home": kVK_Home, "end": kVK_End, "page_up": kVK_PageUp, "page_down": kVK_PageDown, "help": kVK_Help,
+        "minus": kVK_ANSI_Minus, "equal": kVK_ANSI_Equal, "left_bracket": kVK_ANSI_LeftBracket, "right_bracket": kVK_ANSI_RightBracket,
+        "quote": kVK_ANSI_Quote, "semicolon": kVK_ANSI_Semicolon, "backslash": kVK_ANSI_Backslash, "comma": kVK_ANSI_Comma,
+        "slash": kVK_ANSI_Slash, "period": kVK_ANSI_Period, "grave": kVK_ANSI_Grave,
+        "f1": kVK_F1, "f2": kVK_F2, "f3": kVK_F3, "f4": kVK_F4, "f5": kVK_F5, "f6": kVK_F6,
+        "f7": kVK_F7, "f8": kVK_F8, "f9": kVK_F9, "f10": kVK_F10, "f11": kVK_F11, "f12": kVK_F12,
+        "f13": kVK_F13, "f14": kVK_F14, "f15": kVK_F15, "f16": kVK_F16, "f17": kVK_F17, "f18": kVK_F18,
+        "f19": kVK_F19, "f20": kVK_F20, "volume_up": kVK_VolumeUp, "volume_down": kVK_VolumeDown, "mute": kVK_Mute,
+        "keypad_0": kVK_ANSI_Keypad0, "keypad_1": kVK_ANSI_Keypad1, "keypad_2": kVK_ANSI_Keypad2, "keypad_3": kVK_ANSI_Keypad3,
+        "keypad_4": kVK_ANSI_Keypad4, "keypad_5": kVK_ANSI_Keypad5, "keypad_6": kVK_ANSI_Keypad6, "keypad_7": kVK_ANSI_Keypad7,
+        "keypad_8": kVK_ANSI_Keypad8, "keypad_9": kVK_ANSI_Keypad9, "keypad_enter": kVK_ANSI_KeypadEnter,
+        "keypad_plus": kVK_ANSI_KeypadPlus, "keypad_minus": kVK_ANSI_KeypadMinus, "keypad_multiply": kVK_ANSI_KeypadMultiply,
+        "keypad_divide": kVK_ANSI_KeypadDivide, "keypad_decimal": kVK_ANSI_KeypadDecimal,
     ]
-    return keys[name.lowercased()]
+    return keys[key].map(CGKeyCode.init)
 }
 
 func eventFlags(_ names: [String]) -> CGEventFlags {
@@ -546,21 +607,44 @@ func postKeyboard(_ input: [String: Any]) throws -> [String: Any] {
         }
         return ["typedCharacters": text.count, "performed": true]
     }
-    let key = try stringValue(input, "key")
-    guard let code = keyCode(key) else {
-        throw HelperFailure(code: "UI_INVALID_INPUT", message: "Unsupported key '\(key)'")
+    let key = input["key"] as? String
+    let code: CGKeyCode
+    if let raw = input["key_code"] as? NSNumber {
+        guard raw.intValue >= 0 && raw.intValue <= 255 else {
+            throw HelperFailure(code: "UI_INVALID_INPUT", message: "key_code must be between 0 and 255")
+        }
+        code = CGKeyCode(raw.uint16Value)
+    } else if let key, let mapped = keyCode(key) {
+        code = mapped
+    } else {
+        throw HelperFailure(code: "UI_INVALID_INPUT", message: "Supply a supported key name or key_code")
     }
     let modifiers = input["modifiers"] as? [String] ?? []
     let flags = eventFlags(modifiers)
-    guard let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true),
-          let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) else {
-        throw HelperFailure(code: "UI_INPUT_EVENT_FAILED", message: "Could not create keyboard event")
+    let phase = (input["phase"] as? String)?.lowercased() ?? "press"
+    guard ["press", "down", "up"].contains(phase) else {
+        throw HelperFailure(code: "UI_INVALID_INPUT", message: "phase must be press, down, or up")
     }
-    down.flags = flags
-    up.flags = flags
-    down.post(tap: .cghidEventTap)
-    up.post(tap: .cghidEventTap)
-    return ["key": key, "modifiers": modifiers, "performed": true]
+    let repeats = max(1, min(100, (input["repeat"] as? NSNumber)?.intValue ?? 1))
+    let delayMs = max(0, min(2_000, (input["delay_ms"] as? NSNumber)?.intValue ?? 0))
+    for index in 0..<repeats {
+        if phase != "up" {
+            guard let down = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true) else {
+                throw HelperFailure(code: "UI_INPUT_EVENT_FAILED", message: "Could not create key-down event")
+            }
+            down.flags = flags
+            down.post(tap: .cghidEventTap)
+        }
+        if phase != "down" {
+            guard let up = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: false) else {
+                throw HelperFailure(code: "UI_INPUT_EVENT_FAILED", message: "Could not create key-up event")
+            }
+            up.flags = flags
+            up.post(tap: .cghidEventTap)
+        }
+        if delayMs > 0 && index + 1 < repeats { usleep(useconds_t(delayMs * 1_000)) }
+    }
+    return ["key": key ?? "", "keyCode": Int(code), "modifiers": modifiers, "phase": phase, "repeat": repeats, "performed": true]
 }
 
 func clipboardRead() -> [String: Any] {
@@ -597,7 +681,7 @@ struct MacUIHelper {
             case "status":
                 let frontmost = NSWorkspace.shared.frontmostApplication
                 result = [
-                    "helperVersion": "0.1.0",
+                    "helperVersion": "1.0.0",
                     "pid": ProcessInfo.processInfo.processIdentifier,
                     "macOS": ProcessInfo.processInfo.operatingSystemVersionString,
                     "accessibilityTrusted": AXIsProcessTrusted(),
@@ -622,20 +706,46 @@ struct MacUIHelper {
                 guard #available(macOS 14.0, *) else {
                     throw HelperFailure(code: "UI_SCREENSHOT_UNSUPPORTED", message: "Native screenshots require macOS 14 or newer")
                 }
-                let displayId = CGDirectDisplayID(try intValue(input, "display_id", default: Int(CGMainDisplayID())))
-                let maxWidth = max(320, min(6_144, try intValue(input, "max_width", default: 1_600)))
-                let maxHeight = max(240, min(6_144, try intValue(input, "max_height", default: 1_600)))
-                let format = try stringValue(input, "format", default: "jpeg")
-                let quality = try doubleValue(input, "quality", default: 0.78)
-                let image = try await captureDisplay(displayId: displayId, maxWidth: maxWidth, maxHeight: maxHeight, includeCursor: boolValue(input, "include_cursor", default: false))
-                let encoded = try encodeImage(image, format: format, quality: quality)
-                result = [
-                    "mimeType": encoded.0,
-                    "data": encoded.1.base64EncodedString(),
-                    "width": image.width,
-                    "height": image.height,
-                    "displayId": Int(displayId),
-                ]
+                let capture = try await captureNativeTarget(input)
+                result = try encodedCaptureDictionary(
+                    capture,
+                    format: try stringValue(input, "format", default: "jpeg"),
+                    quality: try doubleValue(input, "quality", default: 0.78)
+                )
+            case "ocr":
+                guard #available(macOS 14.0, *) else {
+                    throw HelperFailure(code: "UI_SCREENSHOT_UNSUPPORTED", message: "OCR capture requires macOS 14 or newer")
+                }
+                let capture = try await captureNativeTarget(input)
+                var ocr = try recognizeText(capture.image, input: input)
+                ocr["target"] = capture.target
+                if boolValue(input, "include_screenshot", default: false) {
+                    let encoded = try encodeImage(capture.image, format: try stringValue(input, "format", default: "jpeg"), quality: try doubleValue(input, "quality", default: 0.72))
+                    ocr["mimeType"] = encoded.0
+                    ocr["data"] = encoded.1.base64EncodedString()
+                    ocr["width"] = capture.image.width
+                    ocr["height"] = capture.image.height
+                }
+                result = ocr
+            case "wait_visual":
+                guard #available(macOS 14.0, *) else {
+                    throw HelperFailure(code: "UI_SCREENSHOT_UNSUPPORTED", message: "Visual waits require macOS 14 or newer")
+                }
+                result = try await waitForVisualCondition(input)
+            case "wait_for":
+                result = try waitForAXCondition(input)
+            case "assert":
+                result = try assertAXCondition(input)
+            case "window_action":
+                result = try performWindowAction(input)
+            case "drag_drop":
+                result = try performDragDrop(input)
+            case "dialogs":
+                result = try dialogList(input)
+            case "dialog_action":
+                result = try performDialogAction(input)
+            case "file_dialog":
+                result = try performFileDialog(input)
             case "app_launch":
                 result = runningAppDictionary(try await launchApplication(input))
             case "app_activate":
