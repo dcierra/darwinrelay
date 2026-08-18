@@ -702,6 +702,16 @@ func axWindowsForPid(_ pid: pid_t) -> [AXUIElement] {
     return (axCopy(app, kAXWindowsAttribute as CFString) as? [AXUIElement]) ?? []
 }
 
+func waitForAXWindows(pid: pid_t, timeoutMs: Int = 1_500) -> [AXUIElement] {
+    let deadline = Date().addingTimeInterval(Double(max(0, timeoutMs)) / 1000.0)
+    repeat {
+        let windows = axWindowsForPid(pid)
+        if !windows.isEmpty { return windows }
+        CFRunLoopRunInMode(.defaultMode, 0.04, false)
+    } while Date() < deadline
+    return axWindowsForPid(pid)
+}
+
 func frameDistance(_ lhs: CGRect, _ rhs: CGRect) -> Double {
     abs(lhs.minX - rhs.minX) + abs(lhs.minY - rhs.minY) + abs(lhs.width - rhs.width) + abs(lhs.height - rhs.height)
 }
@@ -722,7 +732,7 @@ func resolveAXWindow(_ input: [String: Any]) throws -> (pid_t, AXUIElement, [Int
         guard let record = cgWindowRecord(windowId: windowId), record.ownerPid > 0 else {
             throw HelperFailure(code: "UI_WINDOW_NOT_FOUND", message: "Window \(windowId) no longer exists")
         }
-        let windows = axWindowsForPid(record.ownerPid)
+        let windows = waitForAXWindows(pid: record.ownerPid)
         guard !windows.isEmpty else {
             throw HelperFailure(code: "UI_WINDOW_AX_UNAVAILABLE", message: "No Accessibility windows are exposed for window \(windowId)")
         }
@@ -747,7 +757,7 @@ func resolveAXWindow(_ input: [String: Any]) throws -> (pid_t, AXUIElement, [Int
         let window = focused as! AXUIElement
         return (pid, window, findPathToElement(pid: pid, target: window) ?? [])
     }
-    guard let window = axWindowsForPid(pid).first else {
+    guard let window = waitForAXWindows(pid: pid).first else {
         throw HelperFailure(code: "UI_WINDOW_NOT_FOUND", message: "No Accessibility window is available for pid \(pid)")
     }
     return (pid, window, findPathToElement(pid: pid, target: window) ?? [])
@@ -991,31 +1001,6 @@ func performDialogAction(_ input: [String: Any]) throws -> [String: Any] {
     return ["performed": true, "action": action, "pid": Int(pid)]
 }
 
-func focusedAXElement(pid: pid_t) -> AXUIElement? {
-    let app = AXUIElementCreateApplication(pid)
-    guard let raw = axCopy(app, kAXFocusedUIElementAttribute as CFString), CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
-    return (raw as! AXUIElement)
-}
-
-func waitForFocusedIdentifier(pid: pid_t, identifier: String, timeoutMs: Int) -> AXUIElement? {
-    let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000.0)
-    repeat {
-        if let focused = focusedAXElement(pid: pid), axString(focused, kAXIdentifierAttribute as CFString) == identifier { return focused }
-        CFRunLoopRunInMode(.defaultMode, 0.03, false)
-    } while Date() < deadline
-    return nil
-}
-
-func waitUntilFocusedIdentifierChanges(pid: pid_t, identifier: String, timeoutMs: Int) -> Bool {
-    let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000.0)
-    repeat {
-        guard let focused = focusedAXElement(pid: pid) else { return true }
-        if axString(focused, kAXIdentifierAttribute as CFString) != identifier { return true }
-        CFRunLoopRunInMode(.defaultMode, 0.03, false)
-    } while Date() < deadline
-    return false
-}
-
 func findAXDescendant(_ root: AXUIElement, selector: [String: Any], maxDepth: Int = 12, maxElements: Int = 2_000) -> AXUIElement? {
     var visited = 0
     func walk(_ element: AXUIElement, depth: Int) -> AXUIElement? {
@@ -1075,6 +1060,32 @@ func currentFilePanelButton(pid: pid_t) -> AXUIElement? {
     return findAXDescendant(panel, selector: ["identifier": "OKButton"], maxDepth: 3, maxElements: 120)
 }
 
+func currentFilePanelElement(pid: pid_t, identifier: String) -> AXUIElement? {
+    guard let panel = currentFilePanel(pid: pid) else { return nil }
+    if let direct = axChildren(panel).first(where: { axString($0, kAXIdentifierAttribute as CFString) == identifier }) {
+        return direct
+    }
+    return findAXDescendant(panel, selector: ["identifier": identifier], maxDepth: 6, maxElements: 300)
+}
+
+func waitForFilePanelElement(pid: pid_t, identifier: String, timeoutMs: Int) -> AXUIElement? {
+    let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000.0)
+    repeat {
+        if let element = currentFilePanelElement(pid: pid, identifier: identifier) { return element }
+        CFRunLoopRunInMode(.defaultMode, 0.04, false)
+    } while Date() < deadline
+    return nil
+}
+
+func waitForFilePanelElementGone(pid: pid_t, identifier: String, timeoutMs: Int) -> Bool {
+    let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000.0)
+    repeat {
+        if currentFilePanelElement(pid: pid, identifier: identifier) == nil { return true }
+        CFRunLoopRunInMode(.defaultMode, 0.04, false)
+    } while Date() < deadline
+    return currentFilePanelElement(pid: pid, identifier: identifier) == nil
+}
+
 func performFileDialog(_ input: [String: Any]) throws -> [String: Any] {
     try requireAccessibility()
     let pid = try targetPid(input)
@@ -1106,26 +1117,53 @@ func performFileDialog(_ input: [String: Any]) throws -> [String: Any] {
         saveName = nil
     }
 
-    // Open Apple's Go-to-Folder sheet by shortcut, then use the focused AX element
-    // directly. This avoids repeatedly traversing a file panel containing thousands
-    // of rows and makes the operation bounded even in very large directories.
-    _ = try postKeyboard(["key": "g", "modifiers": ["command", "shift"]])
-    guard let pathField = waitForFocusedIdentifier(pid: pid, identifier: "PathTextField", timeoutMs: 2_000) else {
-        throw HelperFailure(code: "UI_FILE_DIALOG_NAVIGATION_FAILED", message: "Go-to-Folder path field did not appear")
+    // Open Apple's standard Go-to-Folder sheet. App activation and key-equivalent
+    // delivery are asynchronous, so retry a bounded number of times and recognize
+    // success by the actual AX PathTextField, not by foreground assumptions.
+    var pathField: AXUIElement?
+    for _ in 0..<3 {
+        if let existing = currentFilePanelElement(pid: pid, identifier: "PathTextField") {
+            pathField = existing
+            break
+        }
+        if let app = NSRunningApplication(processIdentifier: pid) { _ = app.activate(options: [.activateIgnoringOtherApps]) }
+        Thread.sleep(forTimeInterval: 0.10)
+        _ = try postKeyboard(["key": "g", "modifiers": ["command", "shift"]])
+        if let opened = waitForFilePanelElement(pid: pid, identifier: "PathTextField", timeoutMs: 900) {
+            pathField = opened
+            break
+        }
     }
-    let setPath = AXUIElementSetAttributeValue(pathField, kAXValueAttribute as CFString, navigationPath as CFTypeRef)
-    guard setPath == .success else {
-        throw HelperFailure(code: "UI_FILE_DIALOG_NAVIGATION_FAILED", message: "Could not set Go-to-Folder path (AX error \(setPath.rawValue))")
+    guard pathField != nil else {
+        throw HelperFailure(code: "UI_FILE_DIALOG_NAVIGATION_FAILED", message: "Go-to-Folder path field did not appear after bounded shortcut retries")
     }
-    _ = try postKeyboard(["key": "return"])
-    guard waitUntilFocusedIdentifierChanges(pid: pid, identifier: "PathTextField", timeoutMs: 2_500) else {
-        throw HelperFailure(code: "UI_FILE_DIALOG_NAVIGATION_FAILED", message: "Go-to-Folder sheet did not accept the requested path")
+
+    // A focus change is not proof that Go-to-Folder committed: autocomplete rows can
+    // take focus while the nested sheet remains open. Re-resolve the live field on
+    // every attempt and accept navigation only when PathTextField actually disappears.
+    var navigationAccepted = false
+    for _ in 0..<3 where !navigationAccepted {
+        guard let liveField = currentFilePanelElement(pid: pid, identifier: "PathTextField") else {
+            navigationAccepted = true
+            break
+        }
+        let setPath = AXUIElementSetAttributeValue(liveField, kAXValueAttribute as CFString, navigationPath as CFTypeRef)
+        guard setPath == .success else {
+            throw HelperFailure(code: "UI_FILE_DIALOG_NAVIGATION_FAILED", message: "Could not set Go-to-Folder path (AX error \(setPath.rawValue))")
+        }
+        _ = AXUIElementSetAttributeValue(liveField, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        Thread.sleep(forTimeInterval: 0.08)
+        _ = try postKeyboard(["key": "return"])
+        navigationAccepted = waitForFilePanelElementGone(pid: pid, identifier: "PathTextField", timeoutMs: 900)
     }
-    Thread.sleep(forTimeInterval: 0.08)
+    guard navigationAccepted else {
+        throw HelperFailure(code: "UI_FILE_DIALOG_NAVIGATION_FAILED", message: "Go-to-Folder sheet did not accept the requested path after bounded commit retries")
+    }
+    Thread.sleep(forTimeInterval: 0.10)
 
     if let saveName {
-        guard let field = focusedAXElement(pid: pid), axString(field, kAXRoleAttribute as CFString) == (kAXTextFieldRole as String) else {
-            throw HelperFailure(code: "UI_FILE_DIALOG_FILENAME_FAILED", message: "Save panel filename field is not the focused text field")
+        guard let field = waitForFilePanelElement(pid: pid, identifier: "saveAsNameTextField", timeoutMs: 1_500) else {
+            throw HelperFailure(code: "UI_FILE_DIALOG_FILENAME_FAILED", message: "Save panel filename field was not exposed through Accessibility")
         }
         let set = AXUIElementSetAttributeValue(field, kAXValueAttribute as CFString, saveName as CFTypeRef)
         guard set == .success else {

@@ -127,7 +127,7 @@ It can wait for either a change from the baseline or a stable interval. This avo
 
 `ui_dialogs` discovers AX sheets/system dialogs and returns button refs. `ui_dialog_action` can press the default/cancel/named button.
 
-`ui_file_dialog` deliberately drives only Apple's standard open/save panel path. It opens Go-to-Folder with the macOS shortcut, waits for the focused `PathTextField`, assigns the absolute path through AX, waits for navigation to settle, then confirms the panel semantically. Both NSOpenPanel and NSSavePanel are covered by the native integration fixture.
+`ui_file_dialog` deliberately drives only Apple's standard open/save panel path. It opens Go-to-Folder with bounded key-equivalent retries, resolves `PathTextField` by Accessibility identifier, assigns the absolute path through AX, and considers navigation complete only when that nested field actually disappears. `NSSavePanel` filenames are set through the stable `saveAsNameTextField` identifier before the outer Open/Save button is pressed semantically. Both NSOpenPanel and NSSavePanel are covered by the native integration fixture.
 
 Custom application-specific file browsers remain ordinary UI and should be handled with `ui_tree`/`ui_screenshot`/`ui_action` instead.
 
@@ -173,4 +173,4 @@ The desktop layer has two test tiers:
 1. deterministic protocol tests with a fake helper — tool advertisement, native image passthrough, observation binding, Strict approvals and audit redaction;
 2. a real AppKit fixture — semantic set/press + postconditions, AX waits/assertions, ScreenCaptureKit window capture, Vision OCR, window geometry changes, native dialogs, visual-change waits, drag/drop, NSOpenPanel and NSSavePanel.
 
-The native fixture test builds everywhere on macOS and automatically skips the runtime portion when CI does not grant Accessibility/Screen Recording. Hosted GitHub macOS can expose those APIs while refusing to deliver synthesized `CGEvent` pointer input into AppKit controls; there CI verifies drag event construction/coordinate routing, while an interactive Mac additionally requires the slider's visible value to change.
+The native fixture test builds everywhere on macOS. GitHub-hosted macOS is deliberately treated as a compile-only environment for the mutable native fixture because runner images can report Accessibility/Screen Recording while still failing `AXPress`/`CGEvent` delivery nondeterministically. The deterministic `desktop-control.mjs` suite exercises the complete MCP desktop surface in hosted CI; the real mutable AppKit E2E runs on an interactive Mac, or on self-hosted CI when `MDB_RUN_NATIVE_DESKTOP_E2E=1` is explicitly set. If an interactive run lacks Accessibility/Screen Recording, it reports that permission boundary and skips after the successful build.
