@@ -574,7 +574,7 @@ final class Controller: NSObject, NSApplicationDelegate {
             try OperatorSettingsStore.setStrictApprovals(enabled)
             render()
             if enabled {
-                notify("Strict approvals enabled", "Websites and non-Chrome foreground app control now require scoped short-lived approvals.")
+                notify("Strict approvals enabled", "Websites and foreground desktop mutations now require scoped short-lived approvals.")
             } else {
                 notify("Relaxed access enabled", "No per-site/per-app approval commands are required. Chrome still routes through the background MDB tab group.")
             }
