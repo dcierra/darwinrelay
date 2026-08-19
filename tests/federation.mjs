@@ -547,10 +547,22 @@ try {
       "a result at the configured maximum must be deliverable without tripping the line cap",
     );
     const huge = await makeFederation([stubProvider({
-      env: { STUB_HUGE_LINE: "1", STUB_HUGE_LINE_BYTES: String(__testing.MAX_PENDING_LINE_BYTES + 1) },
+      env: {
+        STUB_HUGE_LINE: "1",
+        STUB_HUGE_LINE_AFTER_TOOLS_LIST: "1",
+        STUB_HUGE_LINE_BYTES: String(__testing.MAX_PENDING_LINE_BYTES + 1),
+      },
     })]);
+    await poll(
+      () => huge.__stderr.lines.some((line) => line.includes("exceeded") && line.includes("discarded")),
+      { label: "oversized stdout line discard" },
+    );
     const state = huge.status().providers[0];
-    assert.notEqual(state.state, "ready");
+    assert.equal(
+      state.state,
+      "ready",
+      "discarding non-MCP oversized stdout noise must not make a healthy provider unavailable",
+    );
     assert.ok(
       huge.__stderr.lines.some((line) => line.includes("exceeded") && line.includes("discarded")),
       `a single stdout line over the cap must be discarded; stderr was ${JSON.stringify(huge.__stderr.lines.slice(0, 5))}`,
@@ -559,6 +571,11 @@ try {
     // control, and treating it as a crash walked the provider through all five
     // restarts into a permanent state=failed.
     assert.equal(state.restarts, 0, "a stdout-cap discard must not consume a restart attempt");
+    assert.equal(
+      textOf(await huge.callTool("stub__echo", { text: "after-huge-line" })),
+      "echo:after-huge-line",
+      "the MCP framer must resynchronise after discarding oversized non-MCP stdout noise",
+    );
 
     // The scenario the cap made unreachable: a result at the size the provider is
     // CONFIGURED to allow. At an 8 MiB line cap a 12 MB reply SIGKILLed the child
