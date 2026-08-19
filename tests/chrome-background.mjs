@@ -189,6 +189,8 @@ try {
     assert.ok(stat.size > 0, `expected non-empty ${size}px extension icon`);
   }));
   const workerSource = await fs.readFile(path.join(root, "chrome-extension", "service-worker.js"), "utf8");
+  assert.match(workerSource, /VERSION = chrome\.runtime\.getManifest\(\)\.version/);
+  assert.doesNotMatch(workerSource, /const VERSION = "[0-9]/, "service-worker handshake version must come from manifest.json");
   assert.match(workerSource, /WORKSPACE_GROUP_TITLE = "MDB"/);
   assert.match(workerSource, /chrome\.tabs\.group/);
   assert.match(workerSource, /chrome\.tabGroups\.query/);
