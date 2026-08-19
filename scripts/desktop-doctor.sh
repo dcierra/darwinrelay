@@ -3,28 +3,38 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 ROOT="$(cd "$HERE/.." && pwd -P)"
-HELPER="${MAC_DEV_BRIDGE_UI_HELPER:-$ROOT/bin/MacUIHelper}"
+if [[ -n "${MAC_DEV_BRIDGE_UI_HELPER:-}" ]]; then
+  HELPER="$MAC_DEV_BRIDGE_UI_HELPER"
+elif [[ -x "/Applications/MacDevBridge.app/Contents/Helpers/MacUIHelper" ]]; then
+  HELPER="/Applications/MacDevBridge.app/Contents/Helpers/MacUIHelper"
+else
+  HELPER="$ROOT/bin/MacUIHelper"
+fi
 TEMP_HELPER=""
 OPEN=0
+REQUEST=0
 
 usage() {
   cat <<'TXT'
-Usage: scripts/desktop-doctor.sh [--open]
+Usage: scripts/desktop-doctor.sh [--request] [--open]
 
-Checks the non-prompting native desktop-control permissions used by MDB:
+Checks the permissions of the SAME MacUIHelper binary used by the installed MDB:
   Accessibility, Screen Recording, and CoreGraphics event posting.
 
-It never modifies TCC. --open opens Privacy & Security after reporting status.
+--request asks macOS to present any supported permission prompts for MacUIHelper.
+--open opens Privacy & Security after reporting status. Neither option edits TCC.
 Full Disk Access is a separate filesystem permission; use scripts/tcc-doctor.sh.
 TXT
 }
 
-case "${1:-}" in
-  "") ;;
-  --open) OPEN=1 ;;
-  -h|--help) usage; exit 0 ;;
-  *) usage >&2; exit 64 ;;
-esac
+for arg in "$@"; do
+  case "$arg" in
+    --open) OPEN=1 ;;
+    --request) REQUEST=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage >&2; exit 64 ;;
+  esac
+done
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   printf 'desktop-doctor: macOS only\n' >&2
@@ -39,7 +49,11 @@ if [[ ! -x "$HELPER" ]]; then
   HELPER="$TEMP_HELPER"
 fi
 
-RAW="$(printf '{}\n' | "$HELPER" status)"
+if (( REQUEST )); then
+  RAW="$(printf '{"request":true}\n' | "$HELPER" permissions)"
+else
+  RAW="$(printf '{}\n' | "$HELPER" status)"
+fi
 set +e
 node - "$RAW" <<'NODE'
 const raw = JSON.parse(process.argv[2]);

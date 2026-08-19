@@ -24,5 +24,8 @@ jobs:
       - name: Syntax check
         run: npm run check
 
+      - name: Build desktop app bundle
+        run: MAC_DEV_BRIDGE_INSTALL_APP=0 ./menubar/build.sh
+
       - name: Test
         run: npm test

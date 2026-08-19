@@ -92,6 +92,8 @@ ui_screenshot / ui_ocr
 
 PID-targeted event APIs are best-effort: native applications are free to reject synthetic events without returning an actionable failure. Therefore a reported event-post success is not treated as proof that the UI changed; use semantic postconditions for consequential input. `ui_status.postEventsGranted` and the menu-bar `Input` indicator expose the separate CoreGraphics event-post permission.
 
+Installed desktop control uses the nested `MacDevBridge.app/Contents/Helpers/MacUIHelper` executable. The app, helper, and virtual-cursor overlay are signed with the same available Apple code-signing identity and stable identifiers. `MAC_DEV_BRIDGE_UI_HELPER` / `MAC_DEV_BRIDGE_UI_CURSOR_HELPER` are set by the menu app so the MCP runtime cannot accidentally fall back to a differently signed checkout binary. The menu permission row queries this exact helper. Use `scripts/desktop-doctor.sh --request` to ask macOS for the helper permissions and `scripts/desktop-doctor.sh` to verify them without prompting.
+
 `AXEnhancedUserInterface` is enabled best-effort on application roots to improve the exposed tree for applications that support it; unsupported applications simply retain their normal AX behavior.
 
 ## AX target safety

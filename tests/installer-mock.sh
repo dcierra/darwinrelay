@@ -138,6 +138,12 @@ export UNAME_BIN="$MOCK_BIN/uname"
 "$ROOT/install.sh" > "$STATE_DIR/install.out"
 
 [[ -x "$INSTALL_DIR/bridge.mjs" ]]
+[[ -x "$INSTALL_DIR/bin/MacUIHelper" ]]
+[[ -x "$INSTALL_DIR/bin/MacUICursorOverlay" ]]
+HELPER_SIGNATURE="$(codesign -dv --verbose=4 "$INSTALL_DIR/bin/MacUIHelper" 2>&1)"
+CURSOR_SIGNATURE="$(codesign -dv --verbose=4 "$INSTALL_DIR/bin/MacUICursorOverlay" 2>&1)"
+grep -Fq 'Identifier=local.mac-developer-bridge.ui-helper' <<<"$HELPER_SIGNATURE"
+grep -Fq 'Identifier=local.mac-developer-bridge.cursor-overlay' <<<"$CURSOR_SIGNATURE"
 [[ -L "$BIN_DIR/mac-developer-bridge" ]]
 [[ "$(readlink "$BIN_DIR/mac-developer-bridge")" == "$INSTALL_DIR/bridge.mjs" ]]
 [[ "$(cat "$DATA_DIR/FULL_ACCESS_ENABLED")" == "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS" ]]

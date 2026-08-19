@@ -4,6 +4,7 @@
 
 ### Native desktop computer control (private line)
 
+- 0.5.1 signing/TCC hardening: `MacDevBridge.app`, `MacUIHelper`, and `MacUICursorOverlay` now share one stable Apple code-signing identity; helpers are embedded under `Contents/Helpers`, the bridge is explicitly routed to those nested binaries, menu permission indicators query the real helper, and the helper can request its own Accessibility/Screen/Post Events permissions.
 - Menu-bar deployment hardening: `MacDevBridge.app --start` can restore the named tunnel + HTTP transport without Accessibility-driven menu clicks, and `menubar/build.sh` now preserves a real code-signing identity when copying the app into `/Applications` instead of accidentally re-signing the installed copy ad-hoc.
 - P2: added targeted `ui_ax_query` and coordinate-to-semantic `ui_ax_at`; Accessibility snapshots now batch attribute IPC and enable `AXEnhancedUserInterface` best-effort for richer complex-app trees.
 - P2: added PID-targeted background mouse/keyboard input with `preserve_focus`, explicit `background`/`foreground` modes, and `auto` mode that can perform one verified foreground fallback only after a supplied postcondition fails. Explicit background mode never activates the target.

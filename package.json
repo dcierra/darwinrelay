@@ -1,6 +1,6 @@
 {
   "name": "mac-developer-bridge",
-  "version": "0.5.0-desktop.1",
+  "version": "0.5.1-desktop.1",
   "type": "module",
   "description": "Give ChatGPT terminal, browser, and native macOS desktop control through one local MCP bridge.",
   "scripts": {

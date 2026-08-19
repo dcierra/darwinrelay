@@ -15,7 +15,7 @@ import { callMacUiHelper, macUiHelperAvailable, resolveMacUiHelper } from "./lib
 import { MacUiCursor, macUiCursorAvailable, resolveMacUiCursor } from "./lib/mac-ui-cursor.mjs";
 import { advancedBrowserConfig, advancedBrowserRequest, advancedBrowserSocketStatus } from "./lib/advanced-browser.mjs";
 
-const BRIDGE_VERSION = "0.5.0-desktop.1";
+const BRIDGE_VERSION = "0.5.1-desktop.1";
 const SERVER_NAME = "mac-developer-bridge";
 const SERVER_TITLE = "Mac Developer Bridge";
 const MODERN_PROTOCOL = "2026-07-28";
