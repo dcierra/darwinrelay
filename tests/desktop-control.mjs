@@ -13,7 +13,7 @@ if (process.platform !== "darwin") {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const bridgePath = path.resolve(here, "..", "bridge.mjs");
-const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mdb-desktop-control-test-"));
+const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "darwinrelay-desktop-control-test-"));
 const dataDir = path.join(tempRoot, "data");
 const logDir = path.join(tempRoot, "logs");
 const helperPath = path.join(tempRoot, "fake-ui-helper.mjs");
@@ -52,7 +52,7 @@ const target = input.target === "window"
     : { kind: "display", displayId: input.display_id || 1, bounds: { x: 0, y: 0, width: 1440, height: 900 } };
 let result;
 switch (command) {
-  case "status": result = { helperVersion: "test", accessibilityTrusted: true, screenRecordingGranted: true, postEventsGranted: true, frontmostApplication: app, displays: [{ displayId: 1, name: "Test Display", main: true, bounds: { x: 0, y: 0, width: 1440, height: 900 } }], inheritedTestSecret: process.env.MDB_TEST_UI_SECRET || null }; break;
+  case "status": result = { helperVersion: "test", accessibilityTrusted: true, screenRecordingGranted: true, postEventsGranted: true, frontmostApplication: app, displays: [{ displayId: 1, name: "Test Display", main: true, bounds: { x: 0, y: 0, width: 1440, height: 900 } }], inheritedTestSecret: process.env.DARWINRELAY_TEST_UI_SECRET || null }; break;
   case "apps": result = { applications: [app, preview] }; break;
   case "windows": result = { windows: [{ windowId: 9, ownerPid: 123, ownerName: "TextEdit", name: "doc", bounds: { x: 0, y: 0, width: 800, height: 600 }, displayId: 1 }] }; break;
   case "tree": result = { pid: input.pid || 123, elementCount: 1, truncated: false, root: { ref: rootRef, role: "AXApplication", title: "TextEdit", identifier: "fixture.root", actions: [] } }; break;
@@ -87,15 +87,15 @@ const child = spawn(process.execPath, [bridgePath], {
   stdio: ["pipe", "pipe", "pipe"],
   env: {
     ...process.env,
-    MAC_DEV_BRIDGE_DATA_DIR: dataDir,
-    MAC_DEV_BRIDGE_LOG_DIR: logDir,
-    MAC_DEV_BRIDGE_AUDIT_LOG: auditFile,
-    MAC_DEV_BRIDGE_AUDIT_MODE: "full",
-    MAC_DEV_BRIDGE_UI_HELPER: helperPath,
-    MAC_DEV_BRIDGE_UI_CURSOR_HELPER: cursorPath,
-    MAC_DEV_BRIDGE_FOREGROUND_GUI_APPROVAL_FILE: approvalFile,
-    MAC_DEV_BRIDGE_FULL_ACCESS_ACK: "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS",
-    MDB_TEST_UI_SECRET: "MUST_NOT_REACH_NATIVE_HELPER",
+    DARWINRELAY_DATA_DIR: dataDir,
+    DARWINRELAY_LOG_DIR: logDir,
+    DARWINRELAY_AUDIT_LOG: auditFile,
+    DARWINRELAY_AUDIT_MODE: "full",
+    DARWINRELAY_UI_HELPER: helperPath,
+    DARWINRELAY_UI_CURSOR_HELPER: cursorPath,
+    DARWINRELAY_FOREGROUND_GUI_APPROVAL_FILE: approvalFile,
+    DARWINRELAY_FULL_ACCESS_ACK: "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS",
+    DARWINRELAY_TEST_UI_SECRET: "MUST_NOT_REACH_NATIVE_HELPER",
   },
 });
 

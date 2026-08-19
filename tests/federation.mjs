@@ -22,7 +22,7 @@ const disablePath = path.resolve(here, "..", "scripts", "disable.sh");
 const stubPath = path.join(here, "fixtures", "stub-mcp-server.mjs");
 // macOS: /var is a symlink to /private/var, so an unresolved temp path and the
 // path a child reports back are different strings for the same directory.
-const temporaryRoot = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "mac-developer-bridge-federation-")));
+const temporaryRoot = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "darwinrelay-federation-")));
 const FULL_ACCESS_ACK = "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS";
 
 const spawnedPids = new Set();
@@ -112,14 +112,14 @@ async function startBridge({ recheckMs = "400", providerEnv = {} } = {}) {
     env: {
       PATH: process.env.PATH,
       HOME: process.env.HOME,
-      MAC_DEV_BRIDGE_DATA_DIR: dataDir,
-      MAC_DEV_BRIDGE_LOG_DIR: logDir,
-      MAC_DEV_BRIDGE_UNLOCK_FILE: unlockFile,
-      MAC_DEV_BRIDGE_AUDIT_MODE: "metadata",
-      MAC_DEV_BRIDGE_MCP_SERVERS_JSON: JSON.stringify({
+      DARWINRELAY_DATA_DIR: dataDir,
+      DARWINRELAY_LOG_DIR: logDir,
+      DARWINRELAY_UNLOCK_FILE: unlockFile,
+      DARWINRELAY_AUDIT_MODE: "metadata",
+      DARWINRELAY_MCP_SERVERS_JSON: JSON.stringify({
         providers: [{ key: "stub", command: process.execPath, args: [stubPath], env: providerEnv, mode: "isolated" }],
       }),
-      MAC_DEV_BRIDGE_UNLOCK_RECHECK_MS: recheckMs,
+      DARWINRELAY_UNLOCK_RECHECK_MS: recheckMs,
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -346,10 +346,10 @@ try {
     // Seeded into THIS process's environment, so the test proves the child does
     // not inherit them rather than proving they happened to be absent.
     const secretKeys = [
-      "MAC_DEV_BRIDGE_FULL_ACCESS_ACK", "MAC_DEV_BRIDGE_HTTP_TOKEN", "MAC_DEV_BRIDGE_HTTP_TOKEN_FILE",
-      "MAC_DEV_BRIDGE_OAUTH_CLIENT_SECRET", "MAC_DEV_BRIDGE_OAUTH_CLIENT_ID",
-      "MAC_DEV_BRIDGE_DATA_DIR", "MAC_DEV_BRIDGE_LOG_DIR", "MAC_DEV_BRIDGE_AUDIT_LOG",
-      "MAC_DEV_BRIDGE_UNLOCK_FILE", "CONTROL_PLANE_API_KEY", "AWS_ACCESS_KEY_ID",
+      "DARWINRELAY_FULL_ACCESS_ACK", "DARWINRELAY_HTTP_TOKEN", "DARWINRELAY_HTTP_TOKEN_FILE",
+      "DARWINRELAY_OAUTH_CLIENT_SECRET", "DARWINRELAY_OAUTH_CLIENT_ID",
+      "DARWINRELAY_DATA_DIR", "DARWINRELAY_LOG_DIR", "DARWINRELAY_AUDIT_LOG",
+      "DARWINRELAY_UNLOCK_FILE", "CONTROL_PLANE_API_KEY", "AWS_ACCESS_KEY_ID",
       "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "GITHUB_TOKEN", "GH_TOKEN",
       "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CLOUDFLARE_API_TOKEN", "npm_config_registry",
       // The catch-all pattern, which is what protects against secrets nobody
@@ -854,8 +854,8 @@ try {
 
   // --- 20. a hung-but-alive child is caught by ping, not by process liveness
   {
-    const previous = process.env.MAC_DEV_BRIDGE_MCP_PING_IDLE_MS;
-    process.env.MAC_DEV_BRIDGE_MCP_PING_IDLE_MS = "300";
+    const previous = process.env.DARWINRELAY_MCP_PING_IDLE_MS;
+    process.env.DARWINRELAY_MCP_PING_IDLE_MS = "300";
     // The module read the interval at import time, so this seam has to be set
     // before the first import; assert that rather than pretend otherwise.
     const { createFederation: freshCreate } = await import(`../lib/federation.mjs?ping=${Date.now()}`);
@@ -880,8 +880,8 @@ try {
     const pid = federation.status().providers[0].pid;
     if (pid) spawnedPids.add(pid);
     assert.equal(federation.status().providers[0].state, "ready");
-    if (previous === undefined) delete process.env.MAC_DEV_BRIDGE_MCP_PING_IDLE_MS;
-    else process.env.MAC_DEV_BRIDGE_MCP_PING_IDLE_MS = previous;
+    if (previous === undefined) delete process.env.DARWINRELAY_MCP_PING_IDLE_MS;
+    else process.env.DARWINRELAY_MCP_PING_IDLE_MS = previous;
 
     // The process never dies, so only the protocol-level ping can notice.
     await poll(() => stderr.lines.some((line) => line.includes("ping failed")), {
@@ -903,12 +903,12 @@ try {
       env: {
         PATH: process.env.PATH,
         HOME: process.env.HOME,
-        MAC_DEV_BRIDGE_DATA_DIR: dataDir,
-        MAC_DEV_BRIDGE_LOG_DIR: logDir,
-        MAC_DEV_BRIDGE_UNLOCK_FILE: unlockFile,
-        MAC_DEV_BRIDGE_AUDIT_MODE: "metadata",
-        MAC_DEV_BRIDGE_MCP_SERVERS_JSON: JSON.stringify(registry),
-        MAC_DEV_BRIDGE_UNLOCK_RECHECK_MS: "500",
+        DARWINRELAY_DATA_DIR: dataDir,
+        DARWINRELAY_LOG_DIR: logDir,
+        DARWINRELAY_UNLOCK_FILE: unlockFile,
+        DARWINRELAY_AUDIT_MODE: "metadata",
+        DARWINRELAY_MCP_SERVERS_JSON: JSON.stringify(registry),
+        DARWINRELAY_UNLOCK_RECHECK_MS: "500",
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -1075,13 +1075,13 @@ exit 0
           // `%a %b ...` names and silently skipped live recorded process groups.
           LANG: "ru_RU.UTF-8",
           LC_ALL: "",
-          MAC_DEV_BRIDGE_DATA_DIR: dataDir,
-          MAC_DEV_BRIDGE_UNLOCK_FILE: path.join(dataDir, "FULL_ACCESS_ENABLED"),
+          DARWINRELAY_DATA_DIR: dataDir,
+          DARWINRELAY_UNLOCK_FILE: path.join(dataDir, "FULL_ACCESS_ENABLED"),
           // Critical isolation: never let disable.sh resolve bridge.mjs or
           // mcp-http.mjs against this repository checkout. Otherwise its
-          // fallback process scan can match and signal the live developer MDB.
-          MAC_DEV_BRIDGE_INSTALL_DIR: disableInstallDir,
-          MAC_DEV_BRIDGE_HTTP_PORT: "65534",
+          // fallback process scan can match and signal the live developer DarwinRelay.
+          DARWINRELAY_INSTALL_DIR: disableInstallDir,
+          DARWINRELAY_HTTP_PORT: "65534",
           LAUNCHCTL_BIN: launchctlWrapper,
         },
         stdio: ["ignore", "pipe", "pipe"],
@@ -1206,9 +1206,9 @@ exit 0
 
     // The deadline is read once, at module load, so the override needs a fresh
     // module instance rather than a fresh process.
-    process.env.MAC_DEV_BRIDGE_MCP_START_DEADLINE_MS = "2000";
+    process.env.DARWINRELAY_MCP_START_DEADLINE_MS = "2000";
     const fresh = await import("../lib/federation.mjs?startDeadlineOverride=2000");
-    delete process.env.MAC_DEV_BRIDGE_MCP_START_DEADLINE_MS;
+    delete process.env.DARWINRELAY_MCP_START_DEADLINE_MS;
     assert.equal(fresh.__testing.PROVIDER_START_DEADLINE_MS, 2_000);
 
     caseCounter += 1;

@@ -22,7 +22,7 @@ final class FixtureController: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         let frame = NSRect(x: 180, y: 180, width: 720, height: 520)
         window = NSWindow(contentRect: frame, styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = "MDB Desktop Fixture"
+        window.title = "DarwinRelay Desktop Fixture"
         window.setAccessibilityIdentifier("fixture.window")
         window.isReleasedWhenClosed = false
 
@@ -35,7 +35,7 @@ final class FixtureController: NSObject, NSApplicationDelegate {
             root.addSubview(view)
         }
 
-        let title = NSTextField(labelWithString: "Mac Developer Bridge Desktop Control Fixture")
+        let title = NSTextField(labelWithString: "DarwinRelay Desktop Control Fixture")
         title.font = .boldSystemFont(ofSize: 18)
         title.setAccessibilityIdentifier("fixture.title")
         place(title, 28, 458, 520, 28)

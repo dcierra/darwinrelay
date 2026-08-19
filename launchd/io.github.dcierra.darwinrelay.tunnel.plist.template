@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.openai.mac-developer-bridge-tunnel</string>
+  <string>io.github.dcierra.darwinrelay.tunnel</string>
   <key>ProgramArguments</key>
   <array>
     <string>__INSTALL_DIR__/scripts/run-tunnel.sh</string>
@@ -27,23 +27,23 @@
     <string>__HOME__</string>
     <key>PATH</key>
     <string>__PATH__</string>
-    <key>MAC_DEV_BRIDGE_INSTALL_DIR</key>
+    <key>DARWINRELAY_INSTALL_DIR</key>
     <string>__INSTALL_DIR__</string>
-    <key>MAC_DEV_BRIDGE_PROFILE</key>
+    <key>DARWINRELAY_PROFILE</key>
     <string>__PROFILE__</string>
-    <key>MAC_DEV_BRIDGE_DATA_DIR</key>
+    <key>DARWINRELAY_DATA_DIR</key>
     <string>__DATA_DIR__</string>
-    <key>MAC_DEV_BRIDGE_LOG_DIR</key>
+    <key>DARWINRELAY_LOG_DIR</key>
     <string>__LOG_DIR__</string>
-    <key>MAC_DEV_BRIDGE_UNLOCK_FILE</key>
+    <key>DARWINRELAY_UNLOCK_FILE</key>
     <string>__UNLOCK_FILE__</string>
-    <key>MAC_DEV_BRIDGE_AUDIT_MODE</key>
+    <key>DARWINRELAY_AUDIT_MODE</key>
     <string>__AUDIT_MODE__</string>
-    <key>MAC_DEV_BRIDGE_SHELL</key>
+    <key>DARWINRELAY_SHELL</key>
     <string>__BRIDGE_SHELL__</string>
-    <key>MAC_DEV_BRIDGE_KEYCHAIN_SERVICE</key>
+    <key>DARWINRELAY_KEYCHAIN_SERVICE</key>
     <string>__KEYCHAIN_SERVICE__</string>
-    <key>MAC_DEV_BRIDGE_KEYCHAIN_ACCOUNT</key>
+    <key>DARWINRELAY_KEYCHAIN_ACCOUNT</key>
     <string>__KEYCHAIN_ACCOUNT__</string>
     <key>TUNNEL_CLIENT_BIN</key>
     <string>__TUNNEL_CLIENT_BIN__</string>

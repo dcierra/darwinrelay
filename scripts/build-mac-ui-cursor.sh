@@ -2,7 +2,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 ROOT="$(cd "$HERE/.." && pwd -P)"
-OUT="${MAC_DEV_BRIDGE_UI_CURSOR_OUTPUT:-$ROOT/bin/MacUICursorOverlay}"
+OUT="${DARWINRELAY_UI_CURSOR_OUTPUT:-$ROOT/bin/MacUICursorOverlay}"
 source "$HERE/codesign-runtime.sh"
 command -v xcrun >/dev/null || { echo "xcrun not found; install Xcode Command Line Tools" >&2; exit 69; }
 mkdir -p "$(dirname "$OUT")"
@@ -11,6 +11,6 @@ xcrun swiftc -O -parse-as-library \
   -framework AppKit -framework CoreGraphics \
   -o "$OUT" "$ROOT/desktop-helper/MacUICursorOverlay.swift"
 chmod 0755 "$OUT"
-mdb_sign_runtime "$OUT" "local.mac-developer-bridge.cursor-overlay"
+darwinrelay_sign_runtime "$OUT" "io.github.dcierra.darwinrelay.cursor-overlay"
 codesign --verify --strict "$OUT" >/dev/null
 echo "$OUT"

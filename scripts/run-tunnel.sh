@@ -1,10 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-PROFILE="${MAC_DEV_BRIDGE_PROFILE:-mac-developer-bridge}"
+PROFILE="${DARWINRELAY_PROFILE:-darwinrelay}"
 TUNNEL_CLIENT_BIN="${TUNNEL_CLIENT_BIN:-$HOME/.local/bin/tunnel-client}"
-KEYCHAIN_SERVICE="${MAC_DEV_BRIDGE_KEYCHAIN_SERVICE:-OpenAI Secure MCP Tunnel Runtime}"
-KEYCHAIN_ACCOUNT="${MAC_DEV_BRIDGE_KEYCHAIN_ACCOUNT:-$(id -un)}"
+KEYCHAIN_SERVICE="${DARWINRELAY_KEYCHAIN_SERVICE:-OpenAI Secure MCP Tunnel Runtime}"
+KEYCHAIN_ACCOUNT="${DARWINRELAY_KEYCHAIN_ACCOUNT:-$(id -un)}"
 SECURITY_BIN="${SECURITY_BIN:-/usr/bin/security}"
 
 if [[ ! -x "$TUNNEL_CLIENT_BIN" ]]; then

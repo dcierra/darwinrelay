@@ -2,18 +2,18 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
-LABEL="local.mac-developer-bridge.http"
+LABEL="io.github.dcierra.darwinrelay.http"
 DOMAIN="gui/$(id -u)"
-PLIST_DIR="${MAC_DEV_BRIDGE_PLIST_DIR:-$HOME/Library/LaunchAgents}"
+PLIST_DIR="${DARWINRELAY_PLIST_DIR:-$HOME/Library/LaunchAgents}"
 PLIST="$PLIST_DIR/$LABEL.plist"
-APP="${MAC_DEV_BRIDGE_APP_PATH:-/Applications/MacDevBridge.app}"
-APP_EXE="$APP/Contents/MacOS/MacDevBridge"
-LOG_DIR="${MAC_DEV_BRIDGE_LOG_DIR:-$HOME/Library/Logs/MacDeveloperBridge}"
+APP="${DARWINRELAY_APP_PATH:-/Applications/DarwinRelay.app}"
+APP_EXE="$APP/Contents/MacOS/DarwinRelay"
+LOG_DIR="${DARWINRELAY_LOG_DIR:-$HOME/Library/Logs/DarwinRelay}"
 LAUNCHCTL_BIN="${LAUNCHCTL_BIN:-$(command -v launchctl 2>/dev/null || true)}"
 PLUTIL_BIN="${PLUTIL_BIN:-$(command -v plutil 2>/dev/null || true)}"
-LOAD_NOW="${MAC_DEV_BRIDGE_HTTP_AUTOSTART_LOAD_NOW:-auto}"
+LOAD_NOW="${DARWINRELAY_HTTP_AUTOSTART_LOAD_NOW:-auto}"
 
-[[ -x "$APP_EXE" ]] || { printf 'MacDevBridge executable not found: %s\n' "$APP_EXE" >&2; exit 69; }
+[[ -x "$APP_EXE" ]] || { printf 'DarwinRelay executable not found: %s\n' "$APP_EXE" >&2; exit 69; }
 [[ -n "$PLUTIL_BIN" && -x "$PLUTIL_BIN" ]] || { printf 'plutil is required.\n' >&2; exit 69; }
 
 xml_sed_value() {
@@ -40,18 +40,18 @@ sed \
 chmod 600 "$PLIST"
 
 app_running=0
-if ps -axo command= | awk '{ exe=$1; n=split(exe, part, "/"); if (part[n] == "MacDevBridge") found=1 } END { exit(found ? 0 : 1) }'; then
+if ps -axo command= | awk '{ exe=$1; n=split(exe, part, "/"); if (part[n] == "DarwinRelay") found=1 } END { exit(found ? 0 : 1) }'; then
   app_running=1
 fi
 case "$LOAD_NOW" in
   0|false|no) should_load=0 ;;
   1|true|yes) should_load=1 ;;
   auto) (( app_running == 0 )) && should_load=1 || should_load=0 ;;
-  *) printf 'MAC_DEV_BRIDGE_HTTP_AUTOSTART_LOAD_NOW must be auto, 0, or 1.\n' >&2; exit 64 ;;
+  *) printf 'DARWINRELAY_HTTP_AUTOSTART_LOAD_NOW must be auto, 0, or 1.\n' >&2; exit 64 ;;
 esac
 
 if (( app_running == 1 && should_load == 1 )); then
-  printf 'Refusing to load a second MacDevBridge instance while one is already running.\n' >&2
+  printf 'Refusing to load a second DarwinRelay instance while one is already running.\n' >&2
   printf 'Leave LOAD_NOW=auto/0; the LaunchAgent will take ownership on the next login.\n' >&2
   exit 73
 fi
@@ -65,6 +65,6 @@ if (( should_load == 1 )); then
 else
   printf 'HTTP/Cloudflare autostart installed for the next login: %s\n' "$PLIST"
   if (( app_running == 1 )); then
-    printf 'The current MacDevBridge process was left untouched to avoid a duplicate instance.\n'
+    printf 'The current DarwinRelay process was left untouched to avoid a duplicate instance.\n'
   fi
 fi

@@ -19,13 +19,13 @@ set -uo pipefail
 #      than bridge.mjs and can otherwise survive the MCP processes.
 #   6. Any product LaunchAgent: OpenAI Tunnel or HTTP/Cloudflare autostart.
 
-LABEL="com.openai.mac-developer-bridge-tunnel"
-HTTP_LABEL="local.mac-developer-bridge.http"
+LABEL="io.github.dcierra.darwinrelay.tunnel"
+HTTP_LABEL="io.github.dcierra.darwinrelay.http"
 DOMAIN="gui/$(id -u)"
-DATA_DIR="${MAC_DEV_BRIDGE_DATA_DIR:-$HOME/Library/Application Support/MacDeveloperBridge}"
-UNLOCK_FILE="${MAC_DEV_BRIDGE_UNLOCK_FILE:-$DATA_DIR/FULL_ACCESS_ENABLED}"
-PERSONAL_BROWSER_APPROVAL_FILE="${MAC_DEV_BRIDGE_PERSONAL_APPROVAL_FILE:-$DATA_DIR/PERSONAL_BROWSER_APPROVED}"
-FOREGROUND_GUI_APPROVAL_FILE="${MAC_DEV_BRIDGE_FOREGROUND_GUI_APPROVAL_FILE:-$DATA_DIR/FOREGROUND_GUI_APPROVED}"
+DATA_DIR="${DARWINRELAY_DATA_DIR:-$HOME/Library/Application Support/DarwinRelay}"
+UNLOCK_FILE="${DARWINRELAY_UNLOCK_FILE:-$DATA_DIR/FULL_ACCESS_ENABLED}"
+PERSONAL_BROWSER_APPROVAL_FILE="${DARWINRELAY_PERSONAL_APPROVAL_FILE:-$DATA_DIR/PERSONAL_BROWSER_APPROVED}"
+FOREGROUND_GUI_APPROVAL_FILE="${DARWINRELAY_FOREGROUND_GUI_APPROVAL_FILE:-$DATA_DIR/FOREGROUND_GUI_APPROVED}"
 # Not configurable: bridge.mjs hardcodes this location, so an override here
 # would silently search a directory the bridge never writes to.
 JOB_DIR="$DATA_DIR/jobs"
@@ -34,8 +34,8 @@ CHROME_NATIVE_PID_FILE="$DATA_DIR/chrome-native-host.pid"
 CHROME_BACKGROUND_SOCKET="$DATA_DIR/chrome-background.sock"
 BACKGROUND_CHROME_GRANT_DIR="$DATA_DIR/chrome-background-grants"
 LAUNCHCTL_BIN="${LAUNCHCTL_BIN:-$(command -v launchctl 2>/dev/null || true)}"
-HTTP_PORT="${MAC_DEV_BRIDGE_HTTP_PORT:-8787}"
-INSTALL_DIR="${MAC_DEV_BRIDGE_INSTALL_DIR:-$(cd "$(dirname "$0")/.." && pwd -P)}"
+HTTP_PORT="${DARWINRELAY_HTTP_PORT:-8787}"
+INSTALL_DIR="${DARWINRELAY_INSTALL_DIR:-$(cd "$(dirname "$0")/.." && pwd -P)}"
 
 did_something=0
 still_running=0
@@ -53,7 +53,7 @@ still_running=0
 # not enough, or `node tests/http.mjs <path>` and `node -e '...' <path>` match.
 # Shared by both identity checks. $1 is a LITERAL path; quoting it inside [[ =~ ]]
 # is load-bearing — unquoted, an install path containing regex metacharacters
-# stops matching, and `mac-developer-bridge (1)` from a second download is exactly
+# stops matching, and `darwinrelay (1)` from a second download is exactly
 # that. A serving bridge there would be invisible and reported as contained.
 _runs_script_impl() { # literal-or-pattern, cmdline, quote?(1=literal)
   local target="$1" cmd="$2" literal="$3" prefix
@@ -411,7 +411,7 @@ printf 'Note: a browser launched by a child MCP server re-parents itself out of 
 printf '      group, so it may survive. Check for stray browser processes separately.\n'
 
 # The port probe only covers $HTTP_PORT; if the front end was started with a
-# different MAC_DEV_BRIDGE_HTTP_PORT than this shell has, the process re-check
+# different DARWINRELAY_HTTP_PORT than this shell has, the process re-check
 # above is what establishes containment, not this.
 if curl -fsS --max-time 3 "http://127.0.0.1:$HTTP_PORT/healthz" >/dev/null 2>&1; then
   printf '\nWARNING: something is STILL LISTENING on 127.0.0.1:%s.\n' "$HTTP_PORT"

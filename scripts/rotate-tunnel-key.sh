@@ -1,10 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-LABEL="com.openai.mac-developer-bridge-tunnel"
+LABEL="io.github.dcierra.darwinrelay.tunnel"
 DOMAIN="gui/$(id -u)"
-KEYCHAIN_SERVICE="${MAC_DEV_BRIDGE_KEYCHAIN_SERVICE:-OpenAI Secure MCP Tunnel Runtime}"
-KEYCHAIN_ACCOUNT="${MAC_DEV_BRIDGE_KEYCHAIN_ACCOUNT:-$(id -un)}"
+KEYCHAIN_SERVICE="${DARWINRELAY_KEYCHAIN_SERVICE:-OpenAI Secure MCP Tunnel Runtime}"
+KEYCHAIN_ACCOUNT="${DARWINRELAY_KEYCHAIN_ACCOUNT:-$(id -un)}"
 NEW_KEY="${CONTROL_PLANE_API_KEY:-}"
 SECURITY_BIN="${SECURITY_BIN:-/usr/bin/security}"
 LAUNCHCTL_BIN="${LAUNCHCTL_BIN:-$(command -v launchctl 2>/dev/null || true)}"

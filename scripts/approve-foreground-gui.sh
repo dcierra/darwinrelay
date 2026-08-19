@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-DATA_DIR="${MAC_DEV_BRIDGE_DATA_DIR:-$HOME/Library/Application Support/MacDeveloperBridge}"
-APPROVAL_FILE="${MAC_DEV_BRIDGE_FOREGROUND_GUI_APPROVAL_FILE:-$DATA_DIR/FOREGROUND_GUI_APPROVED}"
+DATA_DIR="${DARWINRELAY_DATA_DIR:-$HOME/Library/Application Support/DarwinRelay}"
+APPROVAL_FILE="${DARWINRELAY_FOREGROUND_GUI_APPROVAL_FILE:-$DATA_DIR/FOREGROUND_GUI_APPROVED}"
 MAX_TTL_SECONDS=300
 TTL=60
 APPS=()
@@ -11,7 +11,7 @@ usage() {
   cat <<'TXT'
 Usage: approve-foreground-gui.sh --app NAME [--app NAME ...] [--ttl SECONDS]
 
-Creates a single-use foreground-GUI approval for Mac Developer Bridge.
+Creates a single-use foreground-GUI approval for DarwinRelay.
 
   --app NAME      Desktop application/process allowed to take foreground for ONE shell call.
                   Repeat for commands that intentionally coordinate multiple apps.

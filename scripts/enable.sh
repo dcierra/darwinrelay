@@ -1,17 +1,17 @@
 #!/bin/bash
 set -euo pipefail
 
-LABEL="com.openai.mac-developer-bridge-tunnel"
+LABEL="io.github.dcierra.darwinrelay.tunnel"
 DOMAIN="gui/$(id -u)"
-PLIST_DIR="${MAC_DEV_BRIDGE_PLIST_DIR:-$HOME/Library/LaunchAgents}"
+PLIST_DIR="${DARWINRELAY_PLIST_DIR:-$HOME/Library/LaunchAgents}"
 PLIST="$PLIST_DIR/$LABEL.plist"
-DATA_DIR="${MAC_DEV_BRIDGE_DATA_DIR:-$HOME/Library/Application Support/MacDeveloperBridge}"
-UNLOCK_FILE="${MAC_DEV_BRIDGE_UNLOCK_FILE:-$DATA_DIR/FULL_ACCESS_ENABLED}"
+DATA_DIR="${DARWINRELAY_DATA_DIR:-$HOME/Library/Application Support/DarwinRelay}"
+UNLOCK_FILE="${DARWINRELAY_UNLOCK_FILE:-$DATA_DIR/FULL_ACCESS_ENABLED}"
 ACK="I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS"
 LAUNCHCTL_BIN="${LAUNCHCTL_BIN:-$(command -v launchctl 2>/dev/null || true)}"
 
-if [[ "${MAC_DEV_BRIDGE_FULL_ACCESS_ACK:-}" != "$ACK" ]]; then
-  printf "Refusing to enable unrestricted access. Export MAC_DEV_BRIDGE_FULL_ACCESS_ACK='%s' first.\n" "$ACK" >&2
+if [[ "${DARWINRELAY_FULL_ACCESS_ACK:-}" != "$ACK" ]]; then
+  printf "Refusing to enable unrestricted access. Export DARWINRELAY_FULL_ACCESS_ACK='%s' first.\n" "$ACK" >&2
   exit 64
 fi
 if [[ ! -f "$PLIST" ]]; then
@@ -31,4 +31,4 @@ if ! "$LAUNCHCTL_BIN" print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
 fi
 "$LAUNCHCTL_BIN" enable "$DOMAIN/$LABEL"
 "$LAUNCHCTL_BIN" kickstart -k "$DOMAIN/$LABEL"
-printf 'Mac Developer Bridge enabled and LaunchAgent started.\n'
+printf 'DarwinRelay enabled and LaunchAgent started.\n'

@@ -86,7 +86,7 @@ func requireAccessibility() throws {
     guard AXIsProcessTrusted() else {
         throw HelperFailure(
             code: "UI_ACCESSIBILITY_PERMISSION_REQUIRED",
-            message: "Accessibility permission is required for Mac Developer Bridge desktop control"
+            message: "Accessibility permission is required for DarwinRelay desktop control"
         )
     }
 }

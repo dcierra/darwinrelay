@@ -12,7 +12,7 @@ const TARGET = process.argv[2] || path.join(ROOT, "mcp-http.mjs");
 const BRIDGE = path.join(ROOT, "bridge.mjs");
 
 const TOKEN = "test-token-that-is-long-enough-32";
-const PORT = Number(process.env.MAC_DEV_BRIDGE_TEST_PORT || 8901);
+const PORT = Number(process.env.DARWINRELAY_TEST_PORT || 8901);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 // Negative cases first: the token guards are the whole authorization boundary,
@@ -22,8 +22,8 @@ async function verifyRefusesToStart(token, expected, extraEnv = {}) {
     stdio: ["ignore", "ignore", "pipe"],
     env: {
       ...process.env,
-      MAC_DEV_BRIDGE_HTTP_TOKEN: token,
-      MAC_DEV_BRIDGE_HTTP_PORT: String(PORT),
+      DARWINRELAY_HTTP_TOKEN: token,
+      DARWINRELAY_HTTP_PORT: String(PORT),
       ...extraEnv,
     },
   });
@@ -42,29 +42,29 @@ console.log("  PASS  refuses to start without a usable bearer token");
 
 // The token-file path must honour the same exit-78 contract, not surface a raw
 // ENOENT stack with exit 1.
-const tokenDir = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "mac-developer-bridge-tok-")));
+const tokenDir = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "darwinrelay-tok-")));
 const emptyToken = path.join(tokenDir, "empty");
 await fsp.writeFile(emptyToken, "   \n");
 await verifyRefusesToStart("", /could not be read/, {
-  MAC_DEV_BRIDGE_HTTP_TOKEN_FILE: path.join(tokenDir, "does-not-exist"),
+  DARWINRELAY_HTTP_TOKEN_FILE: path.join(tokenDir, "does-not-exist"),
 });
-await verifyRefusesToStart("", /is empty/, { MAC_DEV_BRIDGE_HTTP_TOKEN_FILE: emptyToken });
+await verifyRefusesToStart("", /is empty/, { DARWINRELAY_HTTP_TOKEN_FILE: emptyToken });
 await fsp.rm(tokenDir, { recursive: true, force: true });
 console.log("  PASS  token file failures exit 78 with a message naming the file");
 
-const dataDir = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "mac-developer-bridge-http-")));
+const dataDir = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "darwinrelay-http-")));
 await fsp.writeFile(path.join(dataDir, "FULL_ACCESS_ENABLED"), "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS\n");
 
 const server = spawn(process.execPath, [TARGET], {
   stdio: ["ignore", "ignore", "pipe"],
   env: {
     ...process.env,
-    MAC_DEV_BRIDGE_HTTP_TOKEN: TOKEN,
-    MAC_DEV_BRIDGE_HTTP_PORT: String(PORT),
-    MAC_DEV_BRIDGE_ENTRY: BRIDGE,
-    MAC_DEV_BRIDGE_DATA_DIR: dataDir,
-    MAC_DEV_BRIDGE_UNLOCK_FILE: path.join(dataDir, "FULL_ACCESS_ENABLED"),
-    MAC_DEV_BRIDGE_AUDIT_MODE: "off",
+    DARWINRELAY_HTTP_TOKEN: TOKEN,
+    DARWINRELAY_HTTP_PORT: String(PORT),
+    DARWINRELAY_ENTRY: BRIDGE,
+    DARWINRELAY_DATA_DIR: dataDir,
+    DARWINRELAY_UNLOCK_FILE: path.join(dataDir, "FULL_ACCESS_ENABLED"),
+    DARWINRELAY_AUDIT_MODE: "off",
   },
 });
 let stderr = "";
@@ -165,7 +165,7 @@ try {
       jsonrpc: "2.0",
       id: 2,
       method: "tools/call",
-      params: { name: "shell_exec", arguments: { command: "env | grep -c MAC_DEV_BRIDGE_HTTP_TOKEN || true" } },
+      params: { name: "shell_exec", arguments: { command: "env | grep -c DARWINRELAY_HTTP_TOKEN || true" } },
     })
   ).json();
   const probeText = JSON.stringify(envProbe);

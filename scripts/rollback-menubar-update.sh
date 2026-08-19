@@ -1,10 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-APP_DIR="${MAC_DEV_BRIDGE_APP_INSTALL_DIR:-/Applications}"
-APP="$APP_DIR/MacDevBridge.app"
-ROLLBACK="$APP_DIR/.MacDevBridge.app.rollback"
-FAILED="$APP_DIR/.MacDevBridge.app.failed.$$"
+APP_DIR="${DARWINRELAY_APP_INSTALL_DIR:-/Applications}"
+APP="$APP_DIR/DarwinRelay.app"
+ROLLBACK="$APP_DIR/.DarwinRelay.app.rollback"
+FAILED="$APP_DIR/.DarwinRelay.app.failed.$$"
 
 [[ -d "$ROLLBACK" ]] || { printf 'No rollback bundle found at %s\n' "$ROLLBACK" >&2; exit 66; }
 codesign --verify --deep --strict "$ROLLBACK"
@@ -12,7 +12,7 @@ codesign --verify --deep --strict "$ROLLBACK"
 mv "$APP" "$FAILED"
 if mv "$ROLLBACK" "$APP" && codesign --verify --deep --strict "$APP"; then
   rm -rf "$FAILED"
-  printf 'Rolled back MacDevBridge.app without restarting the running transport.\n'
+  printf 'Rolled back DarwinRelay.app without restarting the running transport.\n'
   exit 0
 fi
 

@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const bridgePath = path.resolve(here, "..", "bridge.mjs");
 // macOS: /var is a symlink to /private/var, and the shell resolves it in $PWD.
-const temporaryRoot = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "mac-developer-bridge-test-")));
+const temporaryRoot = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "darwinrelay-test-")));
 const workDir = path.join(temporaryRoot, "work");
 const dataDir = path.join(temporaryRoot, "data");
 const logDir = path.join(temporaryRoot, "logs");
@@ -53,11 +53,11 @@ function startBridge() {
   const child = spawn(process.execPath, [bridgePath], {
     env: {
       ...process.env,
-      MAC_DEV_BRIDGE_SHELL: fs.existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh",
-      MAC_DEV_BRIDGE_DATA_DIR: dataDir,
-      MAC_DEV_BRIDGE_LOG_DIR: logDir,
-      MAC_DEV_BRIDGE_AUDIT_MODE: "metadata",
-      MAC_DEV_BRIDGE_FULL_ACCESS_ACK: "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS",
+      DARWINRELAY_SHELL: fs.existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh",
+      DARWINRELAY_DATA_DIR: dataDir,
+      DARWINRELAY_LOG_DIR: logDir,
+      DARWINRELAY_AUDIT_MODE: "metadata",
+      DARWINRELAY_FULL_ACCESS_ACK: "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS",
       CODEX_BIN: fakeCodex,
       CONTROL_PLANE_API_KEY: "sk-test-tunnel-runtime-key-not-a-real-secret",
     },

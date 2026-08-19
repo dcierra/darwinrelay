@@ -21,7 +21,7 @@ const BRIDGE = path.join(ROOT, "bridge.mjs");
 
 const TOKEN = "oauth-test-token-that-is-long-enough";
 const ROTATED_TOKEN = "oauth-test-token-after-rotation-xyz";
-const CLIENT_ID = "mdb-oauth-test-client";
+const CLIENT_ID = "darwinrelay-oauth-test-client";
 const CLIENT_SECRET = "oauth-test-client-secret-0123456789";
 // Measured from ChatGPT's connector dialog. The allowlist is exact-match only, so
 // these two literals are the whole accepted set unless an operator adds more.
@@ -32,14 +32,14 @@ const EXTRA_REDIRECT = "https://client.example/cb";
 const FETCH_TIMEOUT_MS = 15_000;
 // 8901 belongs to tests/http.mjs. Every server gets its own port so a socket left
 // in TIME_WAIT by an earlier phase cannot become an EADDRINUSE exit 74.
-let nextPort = Number(process.env.MAC_DEV_BRIDGE_TEST_PORT || 8902);
+let nextPort = Number(process.env.DARWINRELAY_TEST_PORT || 8902);
 
 const results = [];
 const ok = (name) => {
   results.push(`  PASS  ${name}`);
 };
 
-const tempRoot = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "mac-developer-bridge-oauth-")));
+const tempRoot = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "darwinrelay-oauth-")));
 const logDir = path.join(tempRoot, "logs");
 const unlockFile = path.join(tempRoot, "FULL_ACCESS_ENABLED");
 await fsp.mkdir(logDir, { recursive: true });
@@ -63,19 +63,19 @@ async function startServer({ dataDir, token = TOKEN, env = {}, label = "server" 
     stdio: ["ignore", "ignore", "pipe"],
     env: {
       ...process.env,
-      MAC_DEV_BRIDGE_HTTP_TOKEN: token,
-      MAC_DEV_BRIDGE_HTTP_PORT: String(port),
-      MAC_DEV_BRIDGE_ENTRY: BRIDGE,
-      MAC_DEV_BRIDGE_DATA_DIR: dataDir,
-      MAC_DEV_BRIDGE_LOG_DIR: logDir,
-      MAC_DEV_BRIDGE_UNLOCK_FILE: unlockFile,
-      MAC_DEV_BRIDGE_AUDIT_MODE: "off",
-      MAC_DEV_BRIDGE_OAUTH_CLIENT_ID: CLIENT_ID,
+      DARWINRELAY_HTTP_TOKEN: token,
+      DARWINRELAY_HTTP_PORT: String(port),
+      DARWINRELAY_ENTRY: BRIDGE,
+      DARWINRELAY_DATA_DIR: dataDir,
+      DARWINRELAY_LOG_DIR: logDir,
+      DARWINRELAY_UNLOCK_FILE: unlockFile,
+      DARWINRELAY_AUDIT_MODE: "off",
+      DARWINRELAY_OAUTH_CLIENT_ID: CLIENT_ID,
       // Pinned empty so an operator's own shell environment cannot silently
       // change what this suite is testing.
-      MAC_DEV_BRIDGE_OAUTH_CLIENT_SECRET: "",
-      MAC_DEV_BRIDGE_OAUTH_REDIRECT_URIS: "",
-      MAC_DEV_BRIDGE_PUBLIC_URL: "",
+      DARWINRELAY_OAUTH_CLIENT_SECRET: "",
+      DARWINRELAY_OAUTH_REDIRECT_URIS: "",
+      DARWINRELAY_PUBLIC_URL: "",
       ...env,
     },
   });
@@ -1113,14 +1113,14 @@ try {
     dataDir: await freshDataDir("alt"),
     label: "alt",
     env: {
-      MAC_DEV_BRIDGE_PUBLIC_URL: "https://tunnel.example.test/",
-      MAC_DEV_BRIDGE_OAUTH_CLIENT_SECRET: CLIENT_SECRET,
-      MAC_DEV_BRIDGE_OAUTH_REDIRECT_URIS: `${EXTRA_REDIRECT} , `,
+      DARWINRELAY_PUBLIC_URL: "https://tunnel.example.test/",
+      DARWINRELAY_OAUTH_CLIENT_SECRET: CLIENT_SECRET,
+      DARWINRELAY_OAUTH_REDIRECT_URIS: `${EXTRA_REDIRECT} , `,
     },
   });
   const ALT_ORIGIN = "https://tunnel.example.test";
   const altAs = await req(alt, "/.well-known/oauth-authorization-server");
-  assert.equal(altAs.json.issuer, ALT_ORIGIN, "MAC_DEV_BRIDGE_PUBLIC_URL must win over Host and lose its trailing slash");
+  assert.equal(altAs.json.issuer, ALT_ORIGIN, "DARWINRELAY_PUBLIC_URL must win over Host and lose its trailing slash");
   assert.equal(altAs.json.token_endpoint, `${ALT_ORIGIN}/token`);
   const forgedHost = await raw(
     alt.port,
@@ -1132,7 +1132,7 @@ try {
     altChallenge.includes(`resource_metadata="${ALT_ORIGIN}/.well-known/oauth-protected-resource/mcp"`),
     `challenge ignored PUBLIC_URL: ${altChallenge}`,
   );
-  ok("MAC_DEV_BRIDGE_PUBLIC_URL overrides the Host-derived origin everywhere");
+  ok("DARWINRELAY_PUBLIC_URL overrides the Host-derived origin everywhere");
 
   // Appended, never replaced: the measured ChatGPT callback must still work.
   const extra = await getCode(alt, { redirect_uri: EXTRA_REDIRECT });
@@ -1151,7 +1151,7 @@ try {
     client_secret: CLIENT_SECRET,
   });
   assert.equal(builtInTokens.status, 200, "adding a redirect_uri dropped a built-in ChatGPT callback");
-  ok("MAC_DEV_BRIDGE_OAUTH_REDIRECT_URIS appends to the built-in callbacks");
+  ok("DARWINRELAY_OAUTH_REDIRECT_URIS appends to the built-in callbacks");
 
   // A configured secret is enforced whenever it is presented, in both transports.
   const secretFlow = await getCode(alt);
@@ -1189,7 +1189,7 @@ try {
       jsonrpc: "2.0",
       id: 9,
       method: "tools/call",
-      params: { name: "shell_exec", arguments: { command: "env | grep -c '^MAC_DEV_BRIDGE_OAUTH' || true" } },
+      params: { name: "shell_exec", arguments: { command: "env | grep -c '^DARWINRELAY_OAUTH' || true" } },
     },
     TOKEN,
   );
@@ -1237,16 +1237,16 @@ try {
     const degraded = await startServer({
       dataDir: await freshDataDir("degraded"),
       label: `degraded ${JSON.stringify(bad)}`,
-      env: { MAC_DEV_BRIDGE_PUBLIC_URL: bad },
+      env: { DARWINRELAY_PUBLIC_URL: bad },
     });
-    assert.match(degraded.stderr, /ignoring malformed MAC_DEV_BRIDGE_PUBLIC_URL/, `no warning for ${JSON.stringify(bad)}`);
+    assert.match(degraded.stderr, /ignoring malformed DARWINRELAY_PUBLIC_URL/, `no warning for ${JSON.stringify(bad)}`);
     const d = await req(degraded, "/.well-known/oauth-authorization-server");
     assert.equal(d.json.issuer, degraded.base, `${JSON.stringify(bad)} did not fall back to the Host header`);
     const ch = (await rpc(degraded, { jsonrpc: "2.0", id: 1, method: "ping" })).headers.get("www-authenticate");
     assert.ok(!/[\r\n]/.test(ch) && !ch.includes("X-Injected"), `challenge header polluted by ${JSON.stringify(bad)}`);
     await stop(degraded);
   }
-  ok(`${badPublicUrls.length} malformed MAC_DEV_BRIDGE_PUBLIC_URL values are ignored with a warning, never fatal`);
+  ok(`${badPublicUrls.length} malformed DARWINRELAY_PUBLIC_URL values are ignored with a warning, never fatal`);
 
   console.log(results.join("\n"));
   console.log("oauth test passed");

@@ -14,11 +14,11 @@ if (process.platform !== "darwin") {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 const bridgePath = path.join(root, "bridge.mjs");
-const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mdb-desktop-native-"));
+const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "darwinrelay-desktop-native-"));
 const helperPath = path.join(tempRoot, "MacUIHelper");
 const cursorPath = path.join(tempRoot, "MacUICursorOverlay");
-const fixtureApp = path.join(tempRoot, "MDBDesktopFixture.app");
-const fixtureExe = path.join(fixtureApp, "Contents", "MacOS", "MDBDesktopFixture");
+const fixtureApp = path.join(tempRoot, "DarwinRelayDesktopFixture.app");
+const fixtureExe = path.join(fixtureApp, "Contents", "MacOS", "DarwinRelayDesktopFixture");
 const dataDir = path.join(tempRoot, "data");
 const logDir = path.join(tempRoot, "logs");
 await fs.mkdir(dataDir, { recursive: true });
@@ -30,9 +30,9 @@ function run(command, args, env = {}) {
   return result.stdout.trim();
 }
 
-run("bash", ["scripts/build-mac-ui-helper.sh"], { MAC_DEV_BRIDGE_UI_HELPER_OUTPUT: helperPath });
-run("bash", ["scripts/build-mac-ui-cursor.sh"], { MAC_DEV_BRIDGE_UI_CURSOR_OUTPUT: cursorPath });
-run("bash", ["scripts/build-desktop-fixture.sh"], { MDB_DESKTOP_FIXTURE_APP: fixtureApp });
+run("bash", ["scripts/build-mac-ui-helper.sh"], { DARWINRELAY_UI_HELPER_OUTPUT: helperPath });
+run("bash", ["scripts/build-mac-ui-cursor.sh"], { DARWINRELAY_UI_CURSOR_OUTPUT: cursorPath });
+run("bash", ["scripts/build-desktop-fixture.sh"], { DARWINRELAY_DESKTOP_FIXTURE_APP: fixtureApp });
 
 // GitHub-hosted macOS is not an interactive desktop contract. Depending on the
 // runner image it may report usable TCC permissions while AXPress/CGEvent delivery
@@ -40,8 +40,8 @@ run("bash", ["scripts/build-desktop-fixture.sh"], { MDB_DESKTOP_FIXTURE_APP: fix
 // deterministically in desktop-control.mjs; here it must still compile the real
 // Swift helper and AppKit fixture. Self-hosted interactive CI can opt into the
 // mutable native E2E explicitly.
-if (process.env.CI && process.env.MDB_RUN_NATIVE_DESKTOP_E2E !== "1") {
-  console.log("desktop-control-native: runtime skipped on hosted CI; helper/fixture build passed (set MDB_RUN_NATIVE_DESKTOP_E2E=1 on interactive self-hosted CI)");
+if (process.env.CI && process.env.DARWINRELAY_RUN_NATIVE_DESKTOP_E2E !== "1") {
+  console.log("desktop-control-native: runtime skipped on hosted CI; helper/fixture build passed (set DARWINRELAY_RUN_NATIVE_DESKTOP_E2E=1 on an interactive local Mac)");
   await fs.rm(tempRoot, { recursive: true, force: true });
   process.exit(0);
 }
@@ -62,7 +62,7 @@ if (!permissionStatus.accessibilityTrusted || !permissionStatus.screenRecordingG
 
 // The fixture bundle id is unique to this test. Reclaim a stale fixture from a
 // previously interrupted local run so AX selection cannot bind to the wrong instance.
-spawnSync("pkill", ["-9", "-f", "MDBDesktopFixture.app/Contents/MacOS/MDBDesktopFixture"], { stdio: "ignore" });
+spawnSync("pkill", ["-9", "-f", "DarwinRelayDesktopFixture.app/Contents/MacOS/DarwinRelayDesktopFixture"], { stdio: "ignore" });
 const fixture = spawn(fixtureExe, [], { detached: true, stdio: "ignore" });
 fixture.unref();
 let fixturePid = fixture.pid;
@@ -95,12 +95,12 @@ const bridge = spawn(process.execPath, [bridgePath], {
   stdio: ["pipe", "pipe", "pipe"],
   env: {
     ...process.env,
-    MAC_DEV_BRIDGE_DATA_DIR: dataDir,
-    MAC_DEV_BRIDGE_LOG_DIR: logDir,
-    MAC_DEV_BRIDGE_AUDIT_MODE: "metadata",
-    MAC_DEV_BRIDGE_UI_HELPER: helperPath,
-    MAC_DEV_BRIDGE_UI_CURSOR_HELPER: cursorPath,
-    MAC_DEV_BRIDGE_FULL_ACCESS_ACK: "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS",
+    DARWINRELAY_DATA_DIR: dataDir,
+    DARWINRELAY_LOG_DIR: logDir,
+    DARWINRELAY_AUDIT_MODE: "metadata",
+    DARWINRELAY_UI_HELPER: helperPath,
+    DARWINRELAY_UI_CURSOR_HELPER: cursorPath,
+    DARWINRELAY_FULL_ACCESS_ACK: "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS",
   },
 });
 const rl = readline.createInterface({ input: bridge.stdout });

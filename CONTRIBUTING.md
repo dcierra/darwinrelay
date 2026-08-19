@@ -1,31 +1,48 @@
-# Contributing
+# Contributing to DarwinRelay
 
-Thanks for contributing to Mac Developer Bridge.
+Issues and focused pull requests are welcome.
 
-## Before opening a pull request
+## Development setup
 
-1. Read `SECURITY.md`. This project intentionally exposes unrestricted local capabilities, so changes to authentication, process containment, credential handling, transports, or tool annotations deserve extra scrutiny.
-2. Keep changes focused and avoid adding dependencies unless they are clearly justified.
-3. Run the checks locally:
+Requirements are macOS, Node.js 18+, and Xcode Command Line Tools for the native helpers.
 
 ```bash
+git clone https://github.com/dcierra/darwinrelay.git
+cd darwinrelay
 npm run check
 npm test
 ```
 
-The test suite expects a clean environment. If you are running it from inside an active Mac Developer Bridge session, inherited `MAC_DEV_BRIDGE_*` variables or a live HTTP/Cloudflare transport can interfere with containment tests. Run it from a normal terminal or a clean CI runner.
+For faster iteration the suite is split into the same groups exposed by CI:
+
+```bash
+npm run test:core
+npm run test:desktop
+npm run test:lifecycle
+```
+
+The deterministic desktop protocol suite runs in CI. The mutable AppKit E2E requires a logged-in Mac with Accessibility/Screen Recording permissions:
+
+```bash
+DARWINRELAY_RUN_NATIVE_DESKTOP_E2E=1 node tests/desktop-control-native.mjs
+```
 
 ## Pull requests
 
-Please include:
+Keep changes scoped and explain the security/permission impact when touching shell execution, HTTP/OAuth, browser routing, Accessibility/input delivery, process reclamation, signing or launchd.
 
-- what changed and why;
-- any security implications;
-- tests for behavior changes and bug fixes;
-- documentation updates when configuration or operator behavior changes.
+Before opening a PR:
 
-Do not include credentials, tokens, local runtime state, generated `MacDevBridge.app` bundles, machine-specific paths, or personal data.
+1. Run `npm run check`.
+2. Run the relevant test group; run `npm test` for cross-cutting changes.
+3. Add regression coverage for bug fixes.
+4. Do not weaken fail-closed behavior merely to make an automation path more convenient.
+5. Do not commit generated `.app` bundles, credentials, OAuth/tunnel state, Chrome profile data, machine-specific paths or signing private keys.
 
 ## Security reports
 
-Do not open a public issue for a vulnerability that could expose credentials, bypass authentication, escape containment claims, or broaden remote execution. Use the repository's private GitHub security reporting channel instead.
+Do not open a public issue for a vulnerability that could expose credentials, bypass authentication, weaken the explicit unlock, escape a containment claim, or broaden remote execution. Use GitHub private vulnerability reporting so the issue can be investigated before disclosure.
+
+## Project lineage
+
+DarwinRelay is derived from Mac Developer Bridge under the MIT license. Preserve attribution and the existing license notices when redistributing substantial portions. See [UPSTREAM.md](UPSTREAM.md).

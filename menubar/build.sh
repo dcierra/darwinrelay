@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Builds MacDevBridge.app — a menu bar front end for the Cloudflare/HTTP
+# Builds DarwinRelay.app — a menu bar front end for the Cloudflare/HTTP
 # transport. No Xcode project and no dependencies: swiftc plus a hand-assembled
 # bundle, which is all a single-file AppKit agent needs.
 #
@@ -11,23 +11,23 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 PACKAGE_DIR="$(cd "$HERE/.." && pwd -P)"
-APP="${MAC_DEV_BRIDGE_APP_OUTPUT:-$PACKAGE_DIR/MacDevBridge.app}"
-NAME="MacDevBridge"
-INSTALL_APP="${MAC_DEV_BRIDGE_INSTALL_APP:-1}"
-INSTALL_DIR_OVERRIDE="${MAC_DEV_BRIDGE_APP_INSTALL_DIR:-}"
+APP="${DARWINRELAY_APP_OUTPUT:-$PACKAGE_DIR/DarwinRelay.app}"
+NAME="DarwinRelay"
+INSTALL_APP="${DARWINRELAY_INSTALL_APP:-1}"
+INSTALL_DIR_OVERRIDE="${DARWINRELAY_APP_INSTALL_DIR:-}"
 PACKAGE_VERSION="$(node -p 'require(process.argv[1]).version' "$PACKAGE_DIR/package.json")"
 BUNDLE_VERSION="${PACKAGE_VERSION%%-*}"
 source "$PACKAGE_DIR/scripts/codesign-runtime.sh"
-SIGN_ID="$(mdb_codesign_identity)"
-if [[ -n "$SIGN_ID" ]]; then export MAC_DEV_BRIDGE_SIGN_IDENTITY="$SIGN_ID"; fi
+SIGN_ID="$(darwinrelay_codesign_identity)"
+if [[ -n "$SIGN_ID" ]]; then export DARWINRELAY_SIGN_IDENTITY="$SIGN_ID"; fi
 
 command -v swiftc >/dev/null || { echo "swiftc not found. Install the Xcode Command Line Tools: xcode-select --install" >&2; exit 69; }
 
 # Build the optional native desktop-control helper into the package. The running
 # production app is not involved; bridge.mjs resolves this helper from bin/.
-MAC_DEV_BRIDGE_UI_HELPER_OUTPUT="$PACKAGE_DIR/bin/MacUIHelper" "$PACKAGE_DIR/scripts/build-mac-ui-helper.sh" >/dev/null
+DARWINRELAY_UI_HELPER_OUTPUT="$PACKAGE_DIR/bin/MacUIHelper" "$PACKAGE_DIR/scripts/build-mac-ui-helper.sh" >/dev/null
 echo "  built native desktop-control helper"
-MAC_DEV_BRIDGE_UI_CURSOR_OUTPUT="$PACKAGE_DIR/bin/MacUICursorOverlay" "$PACKAGE_DIR/scripts/build-mac-ui-cursor.sh" >/dev/null
+DARWINRELAY_UI_CURSOR_OUTPUT="$PACKAGE_DIR/bin/MacUICursorOverlay" "$PACKAGE_DIR/scripts/build-mac-ui-cursor.sh" >/dev/null
 echo "  built virtual AI cursor overlay"
 
 echo "Building $NAME..."
@@ -38,7 +38,7 @@ echo "Building $NAME..."
 # still supervises children from a bundle that no longer exists on disk.
 if pgrep -f "$APP/Contents/MacOS/$NAME" >/dev/null 2>&1; then
   echo "  quitting the running instance first"
-  osascript -e 'quit app id "local.mac-developer-bridge.menubar"' >/dev/null 2>&1 || true
+  osascript -e 'quit app id "io.github.dcierra.darwinrelay"' >/dev/null 2>&1 || true
   sleep 1
   pkill -f "$APP/Contents/MacOS/$NAME" 2>/dev/null || true
   sleep 1
@@ -55,8 +55,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key><string>$NAME</string>
-  <key>CFBundleDisplayName</key><string>Mac Developer Bridge</string>
-  <key>CFBundleIdentifier</key><string>local.mac-developer-bridge.menubar</string>
+  <key>CFBundleDisplayName</key><string>DarwinRelay</string>
+  <key>CFBundleIdentifier</key><string>io.github.dcierra.darwinrelay</string>
   <key>CFBundleVersion</key><string>$BUNDLE_VERSION</string>
   <key>CFBundleShortVersionString</key><string>$BUNDLE_VERSION</string>
   <key>CFBundleExecutable</key><string>$NAME</string>
@@ -66,7 +66,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSUIElement</key><true/>
   <!-- Lets the bundle be installed to /Applications while the package stays put.
        The app prefers a package sitting next to itself and falls back to this. -->
-  <key>MDBPackageDirectory</key><string>$PACKAGE_DIR</string>
+  <key>DarwinRelayPackageDirectory</key><string>$PACKAGE_DIR</string>
 </dict>
 </plist>
 PLIST
@@ -88,7 +88,7 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null
 # Sign the outer app with the SAME identity already used for both nested helpers.
 # The helpers are copied before this step so the bundle seal covers their stable
 # designated requirements too.
-mdb_sign_runtime "$APP" "local.mac-developer-bridge.menubar" "$SIGN_ID"
+darwinrelay_sign_runtime "$APP" "io.github.dcierra.darwinrelay" "$SIGN_ID"
 codesign --verify --deep --strict "$APP" >/dev/null
 
 # Install a copy where the user will actually look for it. Installation is a
@@ -106,14 +106,14 @@ same_runtime_identity() {
   current_req="$(designated_requirement "$current")"
   candidate_req="$(designated_requirement "$candidate")"
   if [[ -n "$current_req" && "$current_req" == "$candidate_req" ]]; then return 0; fi
-  if [[ "${MAC_DEV_BRIDGE_ALLOW_SIGNING_CHANGE:-0}" == "1" ]]; then
+  if [[ "${DARWINRELAY_ALLOW_SIGNING_CHANGE:-0}" == "1" ]]; then
     echo "warning: allowing signing-identity change for $label" >&2
     return 0
   fi
   echo "error: refusing to replace $label because its designated code requirement changed" >&2
   echo "  current:   ${current_req:-<none>}" >&2
   echo "  candidate: ${candidate_req:-<none>}" >&2
-  echo "Set MAC_DEV_BRIDGE_ALLOW_SIGNING_CHANGE=1 only when you intentionally want new TCC identities." >&2
+  echo "Set DARWINRELAY_ALLOW_SIGNING_CHANGE=1 only when you intentionally want new TCC identities." >&2
   return 1
 }
 
@@ -136,10 +136,10 @@ install_atomically() {
     same_runtime_identity "$target/Contents/Helpers/MacUIHelper" "$staged/Contents/Helpers/MacUIHelper" "MacUIHelper" || { rm -rf "$staged"; return 1; }
     same_runtime_identity "$target/Contents/Helpers/MacUICursorOverlay" "$staged/Contents/Helpers/MacUICursorOverlay" "MacUICursorOverlay" || { rm -rf "$staged"; return 1; }
     if [[ -d "$rollback" ]]; then
-      for live_file in "$rollback/Contents/MacOS/MacDevBridge" "$rollback/Contents/Helpers/MacUICursorOverlay"; do
+      for live_file in "$rollback/Contents/MacOS/DarwinRelay" "$rollback/Contents/Helpers/MacUICursorOverlay"; do
         if [[ -e "$live_file" ]] && /usr/sbin/lsof -t "$live_file" 2>/dev/null | grep -q .; then
           echo "error: refusing another hot swap while a process is still executing from $rollback" >&2
-          echo "Restart MacDevBridge normally before replacing the retained rollback bundle." >&2
+          echo "Restart DarwinRelay normally before replacing the retained rollback bundle." >&2
           rm -rf "$staged"
           return 1
         fi
@@ -196,7 +196,7 @@ It will appear in the menu bar. Use Start, then "Copy ChatGPT Setup".
 
 The app reads mcp-http.mjs from $PACKAGE_DIR (its own parent directory), keeps
 the bearer token in a mode-0600 file at
-  ~/Library/Application Support/MacDeveloperBridge/http-token
+  ~/Library/Application Support/DarwinRelay/http-token
 and passes it to the front end by file, so the token stays out of ps output.
 
 Start writes the full-access unlock file; Stop and Quit remove it, which makes

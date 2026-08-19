@@ -19,20 +19,20 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const BRIDGE = process.env.MAC_DEV_BRIDGE_ENTRY || path.join(HERE, "bridge.mjs");
+const BRIDGE = process.env.DARWINRELAY_ENTRY || path.join(HERE, "bridge.mjs");
 const HOST = "127.0.0.1"; // never bind wider; the only intended peer is cloudflared on loopback
 const MCP_PATH = "/mcp";
-const PORT = Number(process.env.MAC_DEV_BRIDGE_HTTP_PORT || 8787);
+const PORT = Number(process.env.DARWINRELAY_HTTP_PORT || 8787);
 // Prefer a 0600 file: an environment variable stays readable for the process
 // lifetime via `ps eww`, which reads the kernel's exec-time snapshot and is
 // therefore unaffected by deleting the key from process.env.
-const TOKEN_FILE = process.env.MAC_DEV_BRIDGE_HTTP_TOKEN_FILE || "";
+const TOKEN_FILE = process.env.DARWINRELAY_HTTP_TOKEN_FILE || "";
 
 // --- OAuth configuration ---------------------------------------------------
 // None of this may ever be required: the test harness sets only the token vars,
 // and a missing value here must degrade to "OAuth is unusable", never to a
 // refusal to start.
-const PUBLIC_URL_RAW = (process.env.MAC_DEV_BRIDGE_PUBLIC_URL || "").trim().replace(/\/+$/, "");
+const PUBLIC_URL_RAW = (process.env.DARWINRELAY_PUBLIC_URL || "").trim().replace(/\/+$/, "");
 // A bad override is logged and ignored rather than fatal, and the shape is
 // checked here so it can never carry a quote, CR or LF into a response header.
 const PUBLIC_URL = /^https?:\/\/[^\s"'\\/?#]+$/.test(PUBLIC_URL_RAW) ? PUBLIC_URL_RAW : "";
@@ -69,7 +69,7 @@ function isChatGptCallback(uri) {
 // to silently drop the measured one.
 const REDIRECT_URIS = [
   ...DEFAULT_REDIRECT_URIS,
-  ...(process.env.MAC_DEV_BRIDGE_OAUTH_REDIRECT_URIS || "")
+  ...(process.env.DARWINRELAY_OAUTH_REDIRECT_URIS || "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean),
@@ -108,25 +108,25 @@ if (TOKEN_FILE) {
   try {
     TOKEN = fs.readFileSync(TOKEN_FILE, "utf8").trim();
   } catch (e) {
-    die(`MAC_DEV_BRIDGE_HTTP_TOKEN_FILE could not be read (${TOKEN_FILE}): ${e.code || e.message}`);
+    die(`DARWINRELAY_HTTP_TOKEN_FILE could not be read (${TOKEN_FILE}): ${e.code || e.message}`);
   }
-  if (!TOKEN) die(`MAC_DEV_BRIDGE_HTTP_TOKEN_FILE is empty: ${TOKEN_FILE}`);
+  if (!TOKEN) die(`DARWINRELAY_HTTP_TOKEN_FILE is empty: ${TOKEN_FILE}`);
 } else {
-  TOKEN = process.env.MAC_DEV_BRIDGE_HTTP_TOKEN || "";
+  TOKEN = process.env.DARWINRELAY_HTTP_TOKEN || "";
 }
 const MAX_BODY = 8 * 1024 * 1024;
 const RESPAWN_BACKOFF_MS = 2_000;
 
-const rawTimeout = Number(process.env.MAC_DEV_BRIDGE_HTTP_TIMEOUT_MS || 600_000);
+const rawTimeout = Number(process.env.DARWINRELAY_HTTP_TIMEOUT_MS || 600_000);
 // A malformed value would otherwise become NaN, and setTimeout(NaN) fires in 1ms.
 const REQUEST_TIMEOUT_MS = Number.isFinite(rawTimeout) && rawTimeout > 0 ? rawTimeout : 600_000;
 
-if (!TOKEN) die("MAC_DEV_BRIDGE_HTTP_TOKEN is required. Refusing to start without auth.");
-if (Buffer.byteLength(TOKEN) < 24) die("MAC_DEV_BRIDGE_HTTP_TOKEN must be at least 24 bytes.");
+if (!TOKEN) die("DARWINRELAY_HTTP_TOKEN is required. Refusing to start without auth.");
+if (Buffer.byteLength(TOKEN) < 24) die("DARWINRELAY_HTTP_TOKEN must be at least 24 bytes.");
 // Node decodes incoming header bytes as latin1 while env vars arrive as UTF-8, so a
 // non-ASCII token would never match on the wire. Fail loudly at startup instead.
 if (!/^[\x21-\x7e]+$/.test(TOKEN)) {
-  die("MAC_DEV_BRIDGE_HTTP_TOKEN must be printable ASCII without spaces (e.g. openssl rand -hex 32).");
+  die("DARWINRELAY_HTTP_TOKEN must be printable ASCII without spaces (e.g. openssl rand -hex 32).");
 }
 
 // Hash the token, then keep the plaintext out of the child's environment so
@@ -137,24 +137,24 @@ if (!/^[\x21-\x7e]+$/.test(TOKEN)) {
 // from our own process.env does NOT remove it from `ps eww` output, which comes
 // from the kernel's exec-time snapshot. With unrestricted shell access already
 // granted, an attacker-controlled model could read it back from there. Use
-// MAC_DEV_BRIDGE_HTTP_TOKEN_FILE if that matters to you.
+// DARWINRELAY_HTTP_TOKEN_FILE if that matters to you.
 const TOKEN_DIGEST = crypto.createHash("sha256").update(TOKEN, "latin1").digest();
 // Read the secret before the scrub below removes it, and keep only the digest:
 // a client secret is never persisted and never logged, so this is the only copy.
-const CLIENT_SECRET_DIGEST = process.env.MAC_DEV_BRIDGE_OAUTH_CLIENT_SECRET
-  ? crypto.createHash("sha256").update(process.env.MAC_DEV_BRIDGE_OAUTH_CLIENT_SECRET, "latin1").digest()
+const CLIENT_SECRET_DIGEST = process.env.DARWINRELAY_OAUTH_CLIENT_SECRET
+  ? crypto.createHash("sha256").update(process.env.DARWINRELAY_OAUTH_CLIENT_SECRET, "latin1").digest()
   : null;
-const CONFIGURED_CLIENT_ID = (process.env.MAC_DEV_BRIDGE_OAUTH_CLIENT_ID || "").trim();
+const CONFIGURED_CLIENT_ID = (process.env.DARWINRELAY_OAUTH_CLIENT_ID || "").trim();
 const CHILD_ENV = { ...process.env };
-delete CHILD_ENV.MAC_DEV_BRIDGE_HTTP_TOKEN;
-delete CHILD_ENV.MAC_DEV_BRIDGE_HTTP_TOKEN_FILE;
-delete process.env.MAC_DEV_BRIDGE_HTTP_TOKEN;
+delete CHILD_ENV.DARWINRELAY_HTTP_TOKEN;
+delete CHILD_ENV.DARWINRELAY_HTTP_TOKEN_FILE;
+delete process.env.DARWINRELAY_HTTP_TOKEN;
 // Same reasoning as the bearer token: shell_exec must not be able to read the
 // OAuth client credentials out of its own environment.
-delete CHILD_ENV.MAC_DEV_BRIDGE_OAUTH_CLIENT_SECRET;
-delete CHILD_ENV.MAC_DEV_BRIDGE_OAUTH_CLIENT_ID;
-delete CHILD_ENV.MAC_DEV_BRIDGE_OAUTH_REDIRECT_URIS;
-delete process.env.MAC_DEV_BRIDGE_OAUTH_CLIENT_SECRET;
+delete CHILD_ENV.DARWINRELAY_OAUTH_CLIENT_SECRET;
+delete CHILD_ENV.DARWINRELAY_OAUTH_CLIENT_ID;
+delete CHILD_ENV.DARWINRELAY_OAUTH_REDIRECT_URIS;
+delete process.env.DARWINRELAY_OAUTH_CLIENT_SECRET;
 
 const log = (m) => process.stderr.write(`[${new Date().toISOString()}] ${m}\n`);
 
@@ -162,7 +162,7 @@ const log = (m) => process.stderr.write(`[${new Date().toISOString()}] ${m}\n`);
 // Matching on `pgrep -f mcp-http.mjs` cannot distinguish us from another
 // checkout, from `node --check mcp-http.mjs`, or from a node binary named
 // node22/node24 — all of which produced wrong kill decisions.
-const DATA_DIR = process.env.MAC_DEV_BRIDGE_DATA_DIR || path.join(process.env.HOME || "", "Library/Application Support/MacDeveloperBridge");
+const DATA_DIR = process.env.DARWINRELAY_DATA_DIR || path.join(process.env.HOME || "", "Library/Application Support/DarwinRelay");
 const PID_FILE = path.join(DATA_DIR, "mcp-http.pid");
 const OAUTH_STATE_FILE = path.join(DATA_DIR, "oauth-state.json");
 try {
@@ -492,11 +492,11 @@ function saveStore() {
 let store = emptyStore();
 try {
   if (PUBLIC_URL_RAW && !PUBLIC_URL) {
-    log(`ignoring malformed MAC_DEV_BRIDGE_PUBLIC_URL (expected e.g. https://host.example); falling back to the Host header`);
+    log(`ignoring malformed DARWINRELAY_PUBLIC_URL (expected e.g. https://host.example); falling back to the Host header`);
   }
   store = loadStore();
   if (!store.client.id) {
-    store.client.id = CONFIGURED_CLIENT_ID || `mdb-${crypto.randomBytes(16).toString("hex")}`;
+    store.client.id = CONFIGURED_CLIENT_ID || `darwinrelay-${crypto.randomBytes(16).toString("hex")}`;
     store.client.createdAt = Date.now();
     store.rewrite = true;
   }
@@ -626,7 +626,7 @@ function prmDoc(origin, resource) {
     authorization_servers: [origin],
     scopes_supported: [OAUTH_SCOPE],
     bearer_methods_supported: ["header"],
-    resource_name: "Mac Developer Bridge",
+    resource_name: "DarwinRelay",
   };
 }
 
@@ -823,7 +823,7 @@ function authorizeGet(req, res, url) {
     // before touching the log: control characters stripped so a newline cannot forge
     // a second log line, and truncated so a huge value cannot flood the file.
     log(`rejected redirect_uri: ${String(q.get("redirect_uri") ?? "<absent>").replace(/[\x00-\x1f\x7f]/g, "?").slice(0, 200)}`);
-    return sendErrorPage(res, 400, "Unrecognised redirect_uri. Set MAC_DEV_BRIDGE_OAUTH_REDIRECT_URIS if your client uses a different callback.");
+    return sendErrorPage(res, 400, "Unrecognised redirect_uri. Set DARWINRELAY_OAUTH_REDIRECT_URIS if your client uses a different callback.");
   }
   const clientId = q.get("client_id");
   if (!store.client.id || clientId !== store.client.id) {
@@ -1223,8 +1223,8 @@ function clampMs(raw, fallback) {
   return fallback;
 }
 
-const BODY_IDLE_TIMEOUT_MS = clampMs(process.env.MAC_DEV_BRIDGE_BODY_IDLE_TIMEOUT_MS, 30_000);
-const MAX_BUFFERED_BYTES = clampMs(process.env.MAC_DEV_BRIDGE_MAX_BUFFERED_BYTES, 96 * 1024 * 1024);
+const BODY_IDLE_TIMEOUT_MS = clampMs(process.env.DARWINRELAY_BODY_IDLE_TIMEOUT_MS, 30_000);
+const MAX_BUFFERED_BYTES = clampMs(process.env.DARWINRELAY_MAX_BUFFERED_BYTES, 96 * 1024 * 1024);
 let bufferedBytes = 0;
 let lastLimitLogAt = 0;
 

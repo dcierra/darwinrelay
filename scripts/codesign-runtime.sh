@@ -1,11 +1,11 @@
 #!/bin/bash
-# Shared code-signing helpers for every executable that participates in MDB's
+# Shared code-signing helpers for every executable that participates in DarwinRelay's
 # native desktop runtime. Keep one identity across the menu app and its helper
 # processes so macOS TCC can key grants to a stable designated requirement.
 
-mdb_codesign_identity() {
-  if [[ -n "${MAC_DEV_BRIDGE_SIGN_IDENTITY:-}" ]]; then
-    printf '%s\n' "$MAC_DEV_BRIDGE_SIGN_IDENTITY"
+darwinrelay_codesign_identity() {
+  if [[ -n "${DARWINRELAY_SIGN_IDENTITY:-}" ]]; then
+    printf '%s\n' "$DARWINRELAY_SIGN_IDENTITY"
     return 0
   fi
   command -v security >/dev/null 2>&1 || return 0
@@ -14,11 +14,11 @@ mdb_codesign_identity() {
     || true
 }
 
-mdb_sign_runtime() {
+darwinrelay_sign_runtime() {
   local target="$1"
   local identifier="$2"
   local identity="${3:-}"
-  if [[ -z "$identity" ]]; then identity="$(mdb_codesign_identity)"; fi
+  if [[ -z "$identity" ]]; then identity="$(darwinrelay_codesign_identity)"; fi
 
   if [[ -n "$identity" ]] && codesign --force --options runtime --identifier "$identifier" --sign "$identity" "$target" >/dev/null 2>&1; then
     printf '  signed %s as %s with %s\n' "$target" "$identifier" "$identity" >&2

@@ -2,16 +2,16 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/mac-developer-bridge-installer.XXXXXX")"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/darwinrelay-installer.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
 MOCK_BIN="$TMP/mock-bin"
 HOME_DIR="$TMP/home"
-INSTALL_DIR="$HOME_DIR/custom & install/mac-developer-bridge"
+INSTALL_DIR="$HOME_DIR/custom & install/darwinrelay"
 BIN_DIR="$HOME_DIR/bin"
 PLIST_DIR="$HOME_DIR/LaunchAgents"
-DATA_DIR="$HOME_DIR/Application & Support/MacDeveloperBridge"
-LOG_DIR="$HOME_DIR/Logs & Audit/MacDeveloperBridge"
+DATA_DIR="$HOME_DIR/Application & Support/DarwinRelay"
+LOG_DIR="$HOME_DIR/Logs & Audit/DarwinRelay"
 STATE_DIR="$TMP/state"
 mkdir -p "$MOCK_BIN" "$HOME_DIR" "$STATE_DIR"
 
@@ -113,18 +113,18 @@ export MOCK_SECURITY_STATE="$STATE_DIR/keychain"
 export MOCK_LAUNCHCTL_LOG="$STATE_DIR/launchctl.log"
 export MOCK_TUNNEL_LOG="$STATE_DIR/tunnel.log"
 export MOCK_PROFILE_STATE="$STATE_DIR/profile"
-export MAC_DEV_BRIDGE_INSTALL_DIR="$INSTALL_DIR"
-export MAC_DEV_BRIDGE_BIN_DIR="$BIN_DIR"
-export MAC_DEV_BRIDGE_PLIST_DIR="$PLIST_DIR"
-export MAC_DEV_BRIDGE_DATA_DIR="$DATA_DIR"
+export DARWINRELAY_INSTALL_DIR="$INSTALL_DIR"
+export DARWINRELAY_BIN_DIR="$BIN_DIR"
+export DARWINRELAY_PLIST_DIR="$PLIST_DIR"
+export DARWINRELAY_DATA_DIR="$DATA_DIR"
 # The test process can inherit the real menu-bar bridge unlock path. Override it
 # explicitly so mock uninstall.sh can never revoke the running developer bridge.
-export MAC_DEV_BRIDGE_UNLOCK_FILE="$DATA_DIR/FULL_ACCESS_ENABLED"
-export MAC_DEV_BRIDGE_LOG_DIR="$LOG_DIR"
-export MAC_DEV_BRIDGE_AUDIT_MODE="metadata"
-export MAC_DEV_BRIDGE_SHELL="/bin/bash"
-export MAC_DEV_BRIDGE_PROFILE="mock-profile"
-export MAC_DEV_BRIDGE_FULL_ACCESS_ACK="I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS"
+export DARWINRELAY_UNLOCK_FILE="$DATA_DIR/FULL_ACCESS_ENABLED"
+export DARWINRELAY_LOG_DIR="$LOG_DIR"
+export DARWINRELAY_AUDIT_MODE="metadata"
+export DARWINRELAY_SHELL="/bin/bash"
+export DARWINRELAY_PROFILE="mock-profile"
+export DARWINRELAY_FULL_ACCESS_ACK="I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS"
 export CONTROL_PLANE_TUNNEL_ID="tunnel_0123456789abcdef0123456789abcdef"
 RUNTIME_KEY="sk-test-runtime-key-${RANDOM}-${RANDOM}-not-real"
 export CONTROL_PLANE_API_KEY="$RUNTIME_KEY"
@@ -142,23 +142,23 @@ export UNAME_BIN="$MOCK_BIN/uname"
 [[ -x "$INSTALL_DIR/bin/MacUICursorOverlay" ]]
 HELPER_SIGNATURE="$(codesign -dv --verbose=4 "$INSTALL_DIR/bin/MacUIHelper" 2>&1)"
 CURSOR_SIGNATURE="$(codesign -dv --verbose=4 "$INSTALL_DIR/bin/MacUICursorOverlay" 2>&1)"
-grep -Fq 'Identifier=local.mac-developer-bridge.ui-helper' <<<"$HELPER_SIGNATURE"
-grep -Fq 'Identifier=local.mac-developer-bridge.cursor-overlay' <<<"$CURSOR_SIGNATURE"
-[[ -L "$BIN_DIR/mac-developer-bridge" ]]
-[[ "$(readlink "$BIN_DIR/mac-developer-bridge")" == "$INSTALL_DIR/bridge.mjs" ]]
+grep -Fq 'Identifier=io.github.dcierra.darwinrelay.ui-helper' <<<"$HELPER_SIGNATURE"
+grep -Fq 'Identifier=io.github.dcierra.darwinrelay.cursor-overlay' <<<"$CURSOR_SIGNATURE"
+[[ -L "$BIN_DIR/darwinrelay" ]]
+[[ "$(readlink "$BIN_DIR/darwinrelay")" == "$INSTALL_DIR/bridge.mjs" ]]
 [[ "$(cat "$DATA_DIR/FULL_ACCESS_ENABLED")" == "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS" ]]
 [[ "$(cat "$DATA_DIR/tunnel-profile")" == "mock-profile" ]]
 [[ "$(cat "$STATE_DIR/keychain")" == "$RUNTIME_KEY" ]]
-[[ -s "$PLIST_DIR/com.openai.mac-developer-bridge-tunnel.plist" ]]
-python3 - "$PLIST_DIR/com.openai.mac-developer-bridge-tunnel.plist" "$INSTALL_DIR" "$DATA_DIR" "$LOG_DIR" <<'PY'
+[[ -s "$PLIST_DIR/io.github.dcierra.darwinrelay.tunnel.plist" ]]
+python3 - "$PLIST_DIR/io.github.dcierra.darwinrelay.tunnel.plist" "$INSTALL_DIR" "$DATA_DIR" "$LOG_DIR" <<'PY'
 import plistlib, sys
 plist_path, install_dir, data_dir, log_dir = sys.argv[1:]
 with open(plist_path, 'rb') as handle:
     data = plistlib.load(handle)
 assert data['ProgramArguments'] == [f'{install_dir}/scripts/run-tunnel.sh']
-assert data['EnvironmentVariables']['MAC_DEV_BRIDGE_INSTALL_DIR'] == install_dir
-assert data['EnvironmentVariables']['MAC_DEV_BRIDGE_DATA_DIR'] == data_dir
-assert data['EnvironmentVariables']['MAC_DEV_BRIDGE_LOG_DIR'] == log_dir
+assert data['EnvironmentVariables']['DARWINRELAY_INSTALL_DIR'] == install_dir
+assert data['EnvironmentVariables']['DARWINRELAY_DATA_DIR'] == data_dir
+assert data['EnvironmentVariables']['DARWINRELAY_LOG_DIR'] == log_dir
 assert data['StandardOutPath'] == f'{log_dir}/tunnel.stdout.log'
 assert data['StandardErrorPath'] == f'{log_dir}/tunnel.stderr.log'
 PY
@@ -172,8 +172,8 @@ fi
 
 "$ROOT/uninstall.sh" > "$STATE_DIR/uninstall.out"
 [[ ! -e "$INSTALL_DIR" ]]
-[[ ! -e "$BIN_DIR/mac-developer-bridge" ]]
-[[ ! -e "$PLIST_DIR/com.openai.mac-developer-bridge-tunnel.plist" ]]
+[[ ! -e "$BIN_DIR/darwinrelay" ]]
+[[ ! -e "$PLIST_DIR/io.github.dcierra.darwinrelay.tunnel.plist" ]]
 [[ ! -e "$DATA_DIR/FULL_ACCESS_ENABLED" ]]
 [[ ! -e "$STATE_DIR/keychain" ]]
 

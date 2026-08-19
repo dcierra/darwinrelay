@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
-LABEL="local.mac-developer-bridge.http"
+LABEL="io.github.dcierra.darwinrelay.http"
 DOMAIN="gui/$(id -u)"
-PLIST_DIR="${MAC_DEV_BRIDGE_PLIST_DIR:-$HOME/Library/LaunchAgents}"
+PLIST_DIR="${DARWINRELAY_PLIST_DIR:-$HOME/Library/LaunchAgents}"
 PLIST="$PLIST_DIR/$LABEL.plist"
 LAUNCHCTL_BIN="${LAUNCHCTL_BIN:-$(command -v launchctl 2>/dev/null || true)}"
 if [[ -n "$LAUNCHCTL_BIN" && -x "$LAUNCHCTL_BIN" ]]; then

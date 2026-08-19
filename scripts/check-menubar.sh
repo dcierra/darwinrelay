@@ -17,4 +17,4 @@ for script in \
   "$ROOT/scripts/uninstall-http-autostart.sh"; do
   bash -n "$script"
 done
-plutil -lint "$ROOT/launchd/local.mac-developer-bridge.http.plist.template" >/dev/null
+plutil -lint "$ROOT/launchd/io.github.dcierra.darwinrelay.http.plist.template" >/dev/null

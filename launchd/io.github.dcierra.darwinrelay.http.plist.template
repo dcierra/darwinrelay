@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>local.mac-developer-bridge.http</string>
+  <string>io.github.dcierra.darwinrelay.http</string>
   <key>ProgramArguments</key>
   <array>
     <string>__APP_EXECUTABLE__</string>
@@ -14,7 +14,7 @@
   <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key><string>__HOME__</string>
-    <key>MAC_DEV_BRIDGE_HOME</key><string>__PACKAGE_DIR__</string>
+    <key>DARWINRELAY_HOME</key><string>__PACKAGE_DIR__</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>

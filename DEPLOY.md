@@ -11,19 +11,19 @@ plugin dialog is greyed out, skip to Option B.
 ## Option B — Cloudflare Tunnel + Server URL (personal accounts)
 
 ```bash
-cd ~/Downloads/mac-developer-bridge
+cd ~/Downloads/darwinrelay
 
 # 1. Unlock and generate the bearer token.
-mkdir -p "$HOME/Library/Application Support/MacDeveloperBridge"
+mkdir -p "$HOME/Library/Application Support/DarwinRelay"
 printf 'I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS\n' \
-  > "$HOME/Library/Application Support/MacDeveloperBridge/FULL_ACCESS_ENABLED"
-chmod 600 "$HOME/Library/Application Support/MacDeveloperBridge/FULL_ACCESS_ENABLED"
-export MAC_DEV_BRIDGE_HTTP_TOKEN="$(openssl rand -hex 32)"
-printf 'token: %s\n' "$MAC_DEV_BRIDGE_HTTP_TOKEN"
+  > "$HOME/Library/Application Support/DarwinRelay/FULL_ACCESS_ENABLED"
+chmod 600 "$HOME/Library/Application Support/DarwinRelay/FULL_ACCESS_ENABLED"
+export DARWINRELAY_HTTP_TOKEN="$(openssl rand -hex 32)"
+printf 'token: %s\n' "$DARWINRELAY_HTTP_TOKEN"
 
 # 2. Start the HTTP front end, capturing logs where doctor.sh looks for them.
 #    Without the redirect its 401s, respawns, and errors are lost on scroll.
-LOG_DIR="$HOME/Library/Logs/MacDeveloperBridge"
+LOG_DIR="$HOME/Library/Logs/DarwinRelay"
 mkdir -p "$LOG_DIR"
 node mcp-http.mjs >>"$LOG_DIR/http.stdout.log" 2>>"$LOG_DIR/http.stderr.log" &
 
@@ -113,16 +113,16 @@ Use the actual downloaded filename if the release archive names it differently.
 ### 2. Install the bridge
 
 ```bash
-cd ~/Downloads/mac-developer-bridge
+cd ~/Downloads/darwinrelay
 
-export MAC_DEV_BRIDGE_FULL_ACCESS_ACK='I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS'
+export DARWINRELAY_FULL_ACCESS_ACK='I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS'
 export CONTROL_PLANE_TUNNEL_ID='tunnel_0123456789abcdef0123456789abcdef'
 read -r -s -p 'Tunnel runtime API key: ' CONTROL_PLANE_API_KEY; printf '\n'
 export CONTROL_PLANE_API_KEY
 
 ./install.sh
 
-unset CONTROL_PLANE_API_KEY MAC_DEV_BRIDGE_FULL_ACCESS_ACK
+unset CONTROL_PLANE_API_KEY DARWINRELAY_FULL_ACCESS_ACK
 ```
 
 The installer must finish with successful bridge tests, successful `tunnel-client doctor`, and a loaded LaunchAgent.
@@ -130,7 +130,7 @@ The installer must finish with successful bridge tests, successful `tunnel-clien
 ### 3. Verify the local runtime
 
 ```bash
-"$HOME/.local/share/mac-developer-bridge/scripts/doctor.sh"
+"$HOME/.local/share/darwinrelay/scripts/doctor.sh"
 open http://127.0.0.1:8080/ui
 ```
 
@@ -151,7 +151,7 @@ Availability and permission UI can vary by account rollout and workspace policy.
 Ask ChatGPT:
 
 ```text
-Use Mac Developer Bridge. Call bridge_status, then fs_stat for ~/.codex. Do not call any write tool or shell command yet.
+Use DarwinRelay. Call bridge_status, then fs_stat for ~/.codex. Do not call any write tool or shell command yet.
 ```
 
 Confirm the expected Mac username, home directory, Node path, shell, audit mode, and `fullAccessUnlocked: true`.
@@ -159,8 +159,8 @@ Confirm the expected Mac username, home directory, Node path, shell, audit mode,
 ### 6. Recover the target Codex session
 
 ```text
-Use only Mac Developer Bridge.
-Read Codex thread 019fa926-dbbd-7d72-aa0c-8edd41bd585c without resuming it.
+Use only DarwinRelay.
+Read one of your own persisted Codex thread IDs without resuming it.
 If the complete history does not fit, page codex_thread_turns_list oldest-first with items_view full until nextCursor is null.
 Summarize the objective, repository, branch, decisions, changed files, commands, current errors, and exact next step.
 Then inspect the live repository state and continue from the unfinished step.
@@ -171,7 +171,7 @@ Do not invoke a Codex model or OpenAI API from shell.
 
 ```bash
 # Tunnel transport (install.sh has run):
-"$HOME/.local/share/mac-developer-bridge/scripts/disable.sh"
+"$HOME/.local/share/darwinrelay/scripts/disable.sh"
 
 # HTTP transport — run from the package; this also boots out HTTP autostart if loaded:
 ./scripts/disable.sh
@@ -193,7 +193,7 @@ tool call and exits 78 when it is gone, so `rm` alone refuses the next call. An
 in-flight `shell_exec` is killed rather than left running, and detached
 `shell_start` jobs still outlive the bridge until `disable.sh` reclaims them.
 
-`disable.sh` first boots out either MDB LaunchAgent (Secure Tunnel or
+`disable.sh` first boots out either DarwinRelay LaunchAgent (Secure Tunnel or
 HTTP/Cloudflare autostart), then stops the front end (by pidfile), any `bridge.mjs`
 processes, and detached job process groups. It escalates to `SIGKILL`, re-verifies
 the same targets, and exits non-zero if any survive — or if the unlock file could

@@ -1,7 +1,7 @@
-const NATIVE_HOST = "io.github.alexanderradahl.mac_developer_bridge";
+const NATIVE_HOST = "io.github.dcierra.darwinrelay";
 const VERSION = chrome.runtime.getManifest().version;
-const WORKSPACE_KEY = "macDeveloperBridgeWorkspace";
-const WORKSPACE_GROUP_TITLE = "MDB";
+const WORKSPACE_KEY = "darwinRelayWorkspace";
+const WORKSPACE_GROUP_TITLE = "DR";
 const WORKSPACE_GROUP_COLOR = "blue";
 const WORKSPACE_LEASE_STALE_MS = 30 * 60 * 1000;
 const WORKSPACE_NAVIGATION_TIMEOUT_MS = 15_000;
@@ -18,7 +18,7 @@ function errorPayload(error, code = "CHROME_EXTENSION_ERROR") {
 
 function compilePatterns(patterns) {
   if (!Array.isArray(patterns) || patterns.length === 0) {
-    const error = new Error("No approved URL patterns were supplied by Mac Developer Bridge.");
+    const error = new Error("No approved URL patterns were supplied by DarwinRelay.");
     error.code = "CHROME_NO_URL_GRANT";
     throw error;
   }
@@ -189,12 +189,12 @@ async function initializeWorkspace(poolSize) {
   // explicit one-time foreground setup and NEVER performs that focus change on
   // the operator's behalf.
   if (!targetWindow || !Number.isInteger(windowId)) {
-    const error = new Error("No focused normal Chrome window is available. Bring Chrome to the front once, then run MDB workspace setup again.");
+    const error = new Error("No focused normal Chrome window is available. Bring Chrome to the front once, then run DarwinRelay workspace setup again.");
     error.code = "CHROME_WORKSPACE_SETUP_FOREGROUND_REQUIRED";
     throw error;
   }
   if (targetWindow.focused !== true) {
-    const error = new Error("MDB workspace setup would need to create background tabs, but Chrome is not currently focused. Bring Chrome to the front once and retry; routine browser work will stay background-only afterwards.");
+    const error = new Error("DarwinRelay workspace setup would need to create background tabs, but Chrome is not currently focused. Bring Chrome to the front once and retry; routine browser work will stay background-only afterwards.");
     error.code = "CHROME_WORKSPACE_SETUP_FOREGROUND_REQUIRED";
     throw error;
   }
@@ -294,7 +294,7 @@ async function leaseWorkspaceTab(url, compiled) {
   let state = await reconcileWorkspaceState();
   if (!state) state = await initializeWorkspaceIfChromeFocused();
   if (!state) {
-    const error = new Error("The Mac Developer Bridge Chrome tab group is missing. MDB will recreate it automatically the next time Chrome is naturally foreground; browser work refuses to create a loose fallback tab in the meantime.");
+    const error = new Error("The DarwinRelay Chrome tab group is missing. DarwinRelay will recreate it automatically the next time Chrome is naturally foreground; browser work refuses to create a loose fallback tab in the meantime.");
     error.code = "CHROME_WORKSPACE_MISSING";
     throw error;
   }
@@ -302,7 +302,7 @@ async function leaseWorkspaceTab(url, compiled) {
   const leasedIds = new Set(Object.keys(state.leases).map(Number));
   const tab = state.tabs.find((candidate) => !leasedIds.has(candidate.id));
   if (!tab) {
-    const error = new Error(`All ${state.tabs.length} Mac Developer Bridge background tabs are currently in use. Release one or rerun workspace setup with a larger pool.`);
+    const error = new Error(`All ${state.tabs.length} DarwinRelay background tabs are currently in use. Release one or rerun workspace setup with a larger pool.`);
     error.code = "CHROME_WORKSPACE_EXHAUSTED";
     throw error;
   }
@@ -535,7 +535,7 @@ async function dispatch(message) {
     case "tabs.open": {
       // tabs.open is retained only as a compatibility alias for older callers.
       // It must never call chrome.tabs.create directly; every agent open leases
-      // a managed tab from the MDB group.
+      // a managed tab from the DarwinRelay group.
       const url = String(args.url || "");
       return await leaseWorkspaceTab(url, compiled);
     }

@@ -1,26 +1,26 @@
 #!/bin/bash
 set -u
 
-LABEL="com.openai.mac-developer-bridge-tunnel"
-HTTP_LABEL="local.mac-developer-bridge.http"
+LABEL="io.github.dcierra.darwinrelay.tunnel"
+HTTP_LABEL="io.github.dcierra.darwinrelay.http"
 DOMAIN="gui/$(id -u)"
-INSTALL_DIR="${MAC_DEV_BRIDGE_INSTALL_DIR:-$HOME/.local/share/mac-developer-bridge}"
-DATA_DIR="${MAC_DEV_BRIDGE_DATA_DIR:-$HOME/Library/Application Support/MacDeveloperBridge}"
-LOG_DIR="${MAC_DEV_BRIDGE_LOG_DIR:-$HOME/Library/Logs/MacDeveloperBridge}"
-UNLOCK_FILE="${MAC_DEV_BRIDGE_UNLOCK_FILE:-$DATA_DIR/FULL_ACCESS_ENABLED}"
-KEYCHAIN_SERVICE="${MAC_DEV_BRIDGE_KEYCHAIN_SERVICE:-OpenAI Secure MCP Tunnel Runtime}"
-KEYCHAIN_ACCOUNT="${MAC_DEV_BRIDGE_KEYCHAIN_ACCOUNT:-$(id -un)}"
+INSTALL_DIR="${DARWINRELAY_INSTALL_DIR:-$HOME/.local/share/darwinrelay}"
+DATA_DIR="${DARWINRELAY_DATA_DIR:-$HOME/Library/Application Support/DarwinRelay}"
+LOG_DIR="${DARWINRELAY_LOG_DIR:-$HOME/Library/Logs/DarwinRelay}"
+UNLOCK_FILE="${DARWINRELAY_UNLOCK_FILE:-$DATA_DIR/FULL_ACCESS_ENABLED}"
+KEYCHAIN_SERVICE="${DARWINRELAY_KEYCHAIN_SERVICE:-OpenAI Secure MCP Tunnel Runtime}"
+KEYCHAIN_ACCOUNT="${DARWINRELAY_KEYCHAIN_ACCOUNT:-$(id -un)}"
 TUNNEL_CLIENT_BIN="${TUNNEL_CLIENT_BIN:-$(command -v tunnel-client 2>/dev/null || true)}"
-PROFILE="${MAC_DEV_BRIDGE_PROFILE:-}"
+PROFILE="${DARWINRELAY_PROFILE:-}"
 SECURITY_BIN="${SECURITY_BIN:-/usr/bin/security}"
 LAUNCHCTL_BIN="${LAUNCHCTL_BIN:-$(command -v launchctl 2>/dev/null || true)}"
-HTTP_PORT="${MAC_DEV_BRIDGE_HTTP_PORT:-8787}"
+HTTP_PORT="${DARWINRELAY_HTTP_PORT:-8787}"
 
 if [[ -z "$PROFILE" && -f "$DATA_DIR/tunnel-profile" ]]; then
   PROFILE="$(cat "$DATA_DIR/tunnel-profile")"
 fi
 
-printf 'Mac Developer Bridge diagnostics\n'
+printf 'DarwinRelay diagnostics\n'
 printf '================================\n'
 printf 'Install directory: %s\n' "$INSTALL_DIR"
 printf 'Data directory:    %s\n' "$DATA_DIR"
@@ -67,9 +67,9 @@ if curl -fsS --max-time 3 "http://127.0.0.1:$HTTP_PORT/healthz" >/dev/null 2>&1;
 else
   printf 'not running\n'
 fi
-if [[ -n "${MAC_DEV_BRIDGE_HTTP_TOKEN_FILE:-}" ]]; then
-  if [[ -f "$MAC_DEV_BRIDGE_HTTP_TOKEN_FILE" ]]; then
-    token_mode="$(stat -f '%OLp' "$MAC_DEV_BRIDGE_HTTP_TOKEN_FILE" 2>/dev/null || printf '?')"
+if [[ -n "${DARWINRELAY_HTTP_TOKEN_FILE:-}" ]]; then
+  if [[ -f "$DARWINRELAY_HTTP_TOKEN_FILE" ]]; then
+    token_mode="$(stat -f '%OLp' "$DARWINRELAY_HTTP_TOKEN_FILE" 2>/dev/null || printf '?')"
     # stat drops leading zeros, so 000 arrives as "0" and 040 as "40". Normalize
     # before judging, or mode 000 gets reported as "too open" — the opposite.
     [[ "$token_mode" =~ ^[0-7]+$ ]] && token_mode="$(printf '%03d' "$token_mode")"
@@ -82,11 +82,11 @@ if [[ -n "${MAC_DEV_BRIDGE_HTTP_TOKEN_FILE:-}" ]]; then
       *) token_verdict="TOO OPEN - chmod 600" ;;
     esac
     printf 'HTTP token source:    file %s (mode %s, %s)\n' \
-      "$MAC_DEV_BRIDGE_HTTP_TOKEN_FILE" "$token_mode" "$token_verdict"
+      "$DARWINRELAY_HTTP_TOKEN_FILE" "$token_mode" "$token_verdict"
   else
-    printf 'HTTP token source:    file %s (MISSING)\n' "$MAC_DEV_BRIDGE_HTTP_TOKEN_FILE"
+    printf 'HTTP token source:    file %s (MISSING)\n' "$DARWINRELAY_HTTP_TOKEN_FILE"
   fi
-elif [[ -n "${MAC_DEV_BRIDGE_HTTP_TOKEN:-}" ]]; then
+elif [[ -n "${DARWINRELAY_HTTP_TOKEN:-}" ]]; then
   printf 'HTTP token source:    environment (visible in ps eww; a 0600 file is preferable)\n'
 else
   printf 'HTTP token source:    <not in this shell>\n'

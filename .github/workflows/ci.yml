@@ -9,28 +9,73 @@ on:
 permissions:
   contents: read
 
-jobs:
-  test:
-    # Never execute fork-controlled code on the operator's Mac. Same-repository
-    # branches and main are trusted because this is a private personal repo.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, macOS, ARM64, mdb-ci]
-    timeout-minutes: 15
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
+jobs:
+  static:
+    name: Static checks
+    runs-on: macos-15
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
-
+        with:
+          fetch-depth: 0
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
           node-version: 22
-
-      - name: Syntax check
+      - name: Syntax and native build checks
         run: npm run check
+      - name: Build signed/ad-hoc menu bundle
+        run: DARWINRELAY_INSTALL_APP=0 ./menubar/build.sh
+      - name: Verify source integrity manifest
+        run: npm run check:integrity
+      - name: Install gitleaks
+        run: brew install gitleaks
+      - name: Scan Git history for secrets
+        run: gitleaks git --config .gitleaks.toml --redact=100 .
 
-      - name: Build desktop app bundle
-        run: MAC_DEV_BRIDGE_INSTALL_APP=0 ./menubar/build.sh
+  core:
+    name: Core & protocol tests
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Run core, transport, PTY, federation and browser tests
+        run: npm run test:core
 
-      - name: Test
-        run: npm test
+  desktop:
+    name: Desktop control tests
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Run desktop protocol tests and native build fixture
+        run: npm run test:desktop
+
+  lifecycle:
+    name: Install & lifecycle tests
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Run installer, autostart and rollback tests
+        run: npm run test:lifecycle

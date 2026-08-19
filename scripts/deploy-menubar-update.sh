@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
-APP_DIR="${MAC_DEV_BRIDGE_APP_INSTALL_DIR:-/Applications}"
-APP="$APP_DIR/MacDevBridge.app"
-ROLLBACK="$APP_DIR/.MacDevBridge.app.rollback"
+APP_DIR="${DARWINRELAY_APP_INSTALL_DIR:-/Applications}"
+APP="$APP_DIR/DarwinRelay.app"
+ROLLBACK="$APP_DIR/.DarwinRelay.app.rollback"
 
 pid_for_process_name() {
   local name="$1"
@@ -16,19 +16,19 @@ pid_for_command_contains() {
   ps -axo pid=,command= | awk -v needle="$needle" 'index($0, needle) { print $1; exit }'
 }
 
-before_menu="$(pid_for_process_name MacDevBridge)"
+before_menu="$(pid_for_process_name DarwinRelay)"
 before_http="$(pid_for_command_contains "$ROOT/mcp-http.mjs")"
 before_cf="$(pid_for_command_contains "cloudflared tunnel")"
 
-MAC_DEV_BRIDGE_INSTALL_APP=1 \
-MAC_DEV_BRIDGE_APP_INSTALL_DIR="$APP_DIR" \
+DARWINRELAY_INSTALL_APP=1 \
+DARWINRELAY_APP_INSTALL_DIR="$APP_DIR" \
   "$ROOT/menubar/build.sh"
 
 codesign --verify --deep --strict "$APP"
 helper_status="$($APP/Contents/Helpers/MacUIHelper status <<<'{}')"
 printf '%s\n' "$helper_status" | grep -q '"ok":true'
 
-after_menu="$(pid_for_process_name MacDevBridge)"
+after_menu="$(pid_for_process_name DarwinRelay)"
 after_http="$(pid_for_command_contains "$ROOT/mcp-http.mjs")"
 after_cf="$(pid_for_command_contains "cloudflared tunnel")"
 

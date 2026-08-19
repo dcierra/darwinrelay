@@ -14,7 +14,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 const bridgePath = path.join(root, "bridge.mjs");
 const hostPath = path.join(root, "scripts", "chrome-native-host.mjs");
-const tempRoot = await fs.mkdtemp("/tmp/mdb-chrome-");
+const tempRoot = await fs.mkdtemp("/tmp/darwinrelay-chrome-");
 const dataDir = path.join(tempRoot, "data");
 const logDir = path.join(tempRoot, "logs");
 const socketPath = path.join(dataDir, "chrome-background.sock");
@@ -73,8 +73,8 @@ function startFakeExtensionHost() {
   const child = spawn(process.execPath, [hostPath], {
     env: {
       ...process.env,
-      MAC_DEV_BRIDGE_DATA_DIR: dataDir,
-      MAC_DEV_BRIDGE_CHROME_SOCKET: socketPath,
+      DARWINRELAY_DATA_DIR: dataDir,
+      DARWINRELAY_CHROME_SOCKET: socketPath,
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -110,7 +110,7 @@ function startFakeExtensionHost() {
       child.stdin.write(frameNative({
         type: "ready",
         version: "0.1.0",
-        extensionId: "pcebfblnmcappinbenkmddjdapaoajgm",
+        extensionId: "pfhahlehpahegefejooendokpkklgmgd",
         profile,
       }));
     },
@@ -125,11 +125,11 @@ function startBridge() {
   const child = spawn(process.execPath, [bridgePath], {
     env: {
       ...process.env,
-      MAC_DEV_BRIDGE_DATA_DIR: dataDir,
-      MAC_DEV_BRIDGE_LOG_DIR: logDir,
-      MAC_DEV_BRIDGE_PERSONAL_APPROVAL_FILE: approvalFile,
-      MAC_DEV_BRIDGE_CHROME_SOCKET: socketPath,
-      MAC_DEV_BRIDGE_FULL_ACCESS_ACK: "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS",
+      DARWINRELAY_DATA_DIR: dataDir,
+      DARWINRELAY_LOG_DIR: logDir,
+      DARWINRELAY_PERSONAL_APPROVAL_FILE: approvalFile,
+      DARWINRELAY_CHROME_SOCKET: socketPath,
+      DARWINRELAY_FULL_ACCESS_ACK: "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS",
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -191,7 +191,7 @@ try {
   const workerSource = await fs.readFile(path.join(root, "chrome-extension", "service-worker.js"), "utf8");
   assert.match(workerSource, /VERSION = chrome\.runtime\.getManifest\(\)\.version/);
   assert.doesNotMatch(workerSource, /const VERSION = "[0-9]/, "service-worker handshake version must come from manifest.json");
-  assert.match(workerSource, /WORKSPACE_GROUP_TITLE = "MDB"/);
+  assert.match(workerSource, /WORKSPACE_GROUP_TITLE = "DR"/);
   assert.match(workerSource, /chrome\.tabs\.group/);
   assert.match(workerSource, /chrome\.tabGroups\.query/);
   assert.match(workerSource, /workspace\.open/);
@@ -209,7 +209,7 @@ try {
   const publicKey = Buffer.from(manifest.key, "base64");
   const digest = crypto.createHash("sha256").update(publicKey).digest().subarray(0, 16);
   const extensionId = [...digest].flatMap((byte) => [byte >> 4, byte & 0x0f]).map((n) => String.fromCharCode(97 + n)).join("");
-  assert.equal(extensionId, "pcebfblnmcappinbenkmddjdapaoajgm");
+  assert.equal(extensionId, "pfhahlehpahegefejooendokpkklgmgd");
 
   await fs.writeFile(profileBindingFile, JSON.stringify({
     profileDirectory: "Default",
@@ -394,7 +394,7 @@ try {
   await fs.rm(socketPath, { force: true });
   await fs.writeFile(profileBindingFile, JSON.stringify({
     profileDirectory: "Profile 2",
-    profileName: "ChatGPT_1",
+    profileName: "DarwinRelay Local",
     bindingMode: "dedicated-local",
     expectedSignedIn: false,
   }), { mode: 0o600 });
@@ -405,7 +405,7 @@ try {
   const localProfileStatus = await backgroundChromeStatus({ socketPath });
   assert.equal(localProfileStatus.extensionReady, true);
   assert.equal(localProfileStatus.profileBinding.profileDirectory, "Profile 2");
-  assert.equal(localProfileStatus.profileBinding.profileName, "ChatGPT_1");
+  assert.equal(localProfileStatus.profileBinding.profileName, "DarwinRelay Local");
   assert.equal(localProfileStatus.profileBinding.bindingMode, "dedicated-local");
   assert.equal(localProfileStatus.extension.profile.matchesBinding, true);
   assert.equal(localProfileStatus.extension.profile.signedIn, false);

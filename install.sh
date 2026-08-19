@@ -1,18 +1,18 @@
 #!/bin/bash
 set -euo pipefail
 
-LABEL="com.openai.mac-developer-bridge-tunnel"
+LABEL="io.github.dcierra.darwinrelay.tunnel"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
-INSTALL_DIR="${MAC_DEV_BRIDGE_INSTALL_DIR:-$HOME/.local/share/mac-developer-bridge}"
-BIN_DIR="${MAC_DEV_BRIDGE_BIN_DIR:-$HOME/.local/bin}"
-PLIST_DIR="${MAC_DEV_BRIDGE_PLIST_DIR:-$HOME/Library/LaunchAgents}"
-LOG_DIR="${MAC_DEV_BRIDGE_LOG_DIR:-$HOME/Library/Logs/MacDeveloperBridge}"
-DATA_DIR="${MAC_DEV_BRIDGE_DATA_DIR:-$HOME/Library/Application Support/MacDeveloperBridge}"
-UNLOCK_FILE="${MAC_DEV_BRIDGE_UNLOCK_FILE:-$DATA_DIR/FULL_ACCESS_ENABLED}"
-AUDIT_MODE="${MAC_DEV_BRIDGE_AUDIT_MODE:-metadata}"
-BRIDGE_SHELL="${MAC_DEV_BRIDGE_SHELL:-/bin/zsh}"
-KEYCHAIN_SERVICE="${MAC_DEV_BRIDGE_KEYCHAIN_SERVICE:-OpenAI Secure MCP Tunnel Runtime}"
-KEYCHAIN_ACCOUNT="${MAC_DEV_BRIDGE_KEYCHAIN_ACCOUNT:-$(id -un)}"
+INSTALL_DIR="${DARWINRELAY_INSTALL_DIR:-$HOME/.local/share/darwinrelay}"
+BIN_DIR="${DARWINRELAY_BIN_DIR:-$HOME/.local/bin}"
+PLIST_DIR="${DARWINRELAY_PLIST_DIR:-$HOME/Library/LaunchAgents}"
+LOG_DIR="${DARWINRELAY_LOG_DIR:-$HOME/Library/Logs/DarwinRelay}"
+DATA_DIR="${DARWINRELAY_DATA_DIR:-$HOME/Library/Application Support/DarwinRelay}"
+UNLOCK_FILE="${DARWINRELAY_UNLOCK_FILE:-$DATA_DIR/FULL_ACCESS_ENABLED}"
+AUDIT_MODE="${DARWINRELAY_AUDIT_MODE:-metadata}"
+BRIDGE_SHELL="${DARWINRELAY_SHELL:-/bin/zsh}"
+KEYCHAIN_SERVICE="${DARWINRELAY_KEYCHAIN_SERVICE:-OpenAI Secure MCP Tunnel Runtime}"
+KEYCHAIN_ACCOUNT="${DARWINRELAY_KEYCHAIN_ACCOUNT:-$(id -un)}"
 FULL_ACCESS_ACK_EXPECTED="I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS"
 TUNNEL_CLIENT_BIN="${TUNNEL_CLIENT_BIN:-$(command -v tunnel-client 2>/dev/null || true)}"
 CODEX_BIN="${CODEX_BIN:-$(command -v codex 2>/dev/null || true)}"
@@ -43,12 +43,12 @@ xml_sed_value() {
     | sed -e 's/[\\&|]/\\&/g'
 }
 
-say "Installing Mac Developer Bridge..."
+say "Installing DarwinRelay..."
 
-if [[ "${MAC_DEV_BRIDGE_FULL_ACCESS_ACK:-}" != "$FULL_ACCESS_ACK_EXPECTED" ]]; then
+if [[ "${DARWINRELAY_FULL_ACCESS_ACK:-}" != "$FULL_ACCESS_ACK_EXPECTED" ]]; then
   warn "This bridge grants unrestricted shell and filesystem access as your macOS user."
   warn "To acknowledge that explicitly, rerun with:"
-  warn "  export MAC_DEV_BRIDGE_FULL_ACCESS_ACK='$FULL_ACCESS_ACK_EXPECTED'"
+  warn "  export DARWINRELAY_FULL_ACCESS_ACK='$FULL_ACCESS_ACK_EXPECTED'"
   exit 64
 fi
 
@@ -117,20 +117,20 @@ fi
 
 case "$AUDIT_MODE" in
   off|metadata|full) ;;
-  *) warn "MAC_DEV_BRIDGE_AUDIT_MODE must be off, metadata, or full."; exit 64 ;;
+  *) warn "DARWINRELAY_AUDIT_MODE must be off, metadata, or full."; exit 64 ;;
 esac
 if [[ ! -x "$BRIDGE_SHELL" ]]; then
   warn "Configured shell is not executable: $BRIDGE_SHELL"
   exit 69
 fi
 
-if [[ -z "${MAC_DEV_BRIDGE_PROFILE:-}" ]]; then
-  PROFILE="mac-developer-bridge-$(date -u +%Y%m%d%H%M%S)-${CONTROL_PLANE_TUNNEL_ID: -8}"
+if [[ -z "${DARWINRELAY_PROFILE:-}" ]]; then
+  PROFILE="darwinrelay-$(date -u +%Y%m%d%H%M%S)-${CONTROL_PLANE_TUNNEL_ID: -8}"
 else
-  PROFILE="$MAC_DEV_BRIDGE_PROFILE"
+  PROFILE="$DARWINRELAY_PROFILE"
 fi
 if [[ ! "$PROFILE" =~ ^[A-Za-z0-9._-]+$ ]]; then
-  warn "MAC_DEV_BRIDGE_PROFILE may contain only letters, numbers, periods, underscores, and hyphens."
+  warn "DARWINRELAY_PROFILE may contain only letters, numbers, periods, underscores, and hyphens."
   exit 64
 fi
 
@@ -146,18 +146,18 @@ if [[ "$SCRIPT_DIR" != "$INSTALL_DIR" ]]; then
   rsync -a --delete --exclude '.DS_Store' "$SCRIPT_DIR/" "$INSTALL_DIR/"
 fi
 chmod +x "$INSTALL_DIR/bridge.mjs" "$INSTALL_DIR/mcp-http.mjs" "$INSTALL_DIR/install.sh" "$INSTALL_DIR/uninstall.sh" "$INSTALL_DIR/scripts/"*.sh
-ln -sfn "$INSTALL_DIR/bridge.mjs" "$BIN_DIR/mac-developer-bridge"
+ln -sfn "$INSTALL_DIR/bridge.mjs" "$BIN_DIR/darwinrelay"
 
 # Native desktop control is optional for the portable bridge, but on macOS with
 # Swift tooling available we build it automatically. Failure does not weaken the
 # existing terminal/filesystem bridge; ui_* tools simply stay unadvertised.
 if command -v xcrun >/dev/null 2>&1 && command -v swiftc >/dev/null 2>&1; then
-  if MAC_DEV_BRIDGE_UI_HELPER_OUTPUT="$INSTALL_DIR/bin/MacUIHelper" "$INSTALL_DIR/scripts/build-mac-ui-helper.sh" >/dev/null; then
+  if DARWINRELAY_UI_HELPER_OUTPUT="$INSTALL_DIR/bin/MacUIHelper" "$INSTALL_DIR/scripts/build-mac-ui-helper.sh" >/dev/null; then
     say "Built native desktop-control helper."
   else
     warn "Note: native desktop-control helper failed to build; terminal/filesystem tools remain available."
   fi
-  if MAC_DEV_BRIDGE_UI_CURSOR_OUTPUT="$INSTALL_DIR/bin/MacUICursorOverlay" "$INSTALL_DIR/scripts/build-mac-ui-cursor.sh" >/dev/null; then
+  if DARWINRELAY_UI_CURSOR_OUTPUT="$INSTALL_DIR/bin/MacUICursorOverlay" "$INSTALL_DIR/scripts/build-mac-ui-cursor.sh" >/dev/null; then
     say "Built virtual AI cursor overlay."
   else
     warn "Note: virtual AI cursor overlay failed to build; desktop control remains available without it."
@@ -185,7 +185,7 @@ export CONTROL_PLANE_API_KEY
   --sample sample_mcp_stdio_local \
   --profile "$PROFILE" \
   --tunnel-id "$CONTROL_PLANE_TUNNEL_ID" \
-  --mcp-command "$BIN_DIR/mac-developer-bridge"
+  --mcp-command "$BIN_DIR/darwinrelay"
 
 say "Running tunnel diagnostics..."
 "$TUNNEL_CLIENT_BIN" doctor --profile "$PROFILE" --explain
@@ -244,7 +244,7 @@ cat <<OUT
 
 Installed successfully.
 
-Bridge command:       $BIN_DIR/mac-developer-bridge
+Bridge command:       $BIN_DIR/darwinrelay
 Tunnel profile:       $PROFILE
 Tunnel ID:            $CONTROL_PLANE_TUNNEL_ID
 LaunchAgent:          $PLIST_PATH
@@ -258,7 +258,7 @@ Next:
 2. Open ChatGPT Plugins, press +, choose Tunnel, and select/paste $CONTROL_PLANE_TUNNEL_ID.
 3. Review and enable the discovered tools. ChatGPT-level confirmation policy remains separate from this unrestricted local bridge.
 4. Start a new Chat conversation, select the app, and call bridge_status.
-5. Then call codex_thread_read with thread_id 019fa926-dbbd-7d72-aa0c-8edd41bd585c.
+5. If you use Codex history, call codex_thread_list and then codex_thread_read for one of your own persisted threads.
 
 Run diagnostics at any time:
   $INSTALL_DIR/scripts/doctor.sh

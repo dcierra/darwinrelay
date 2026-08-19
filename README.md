@@ -1,760 +1,195 @@
-# Mac Developer Bridge
+# DarwinRelay
 
-### Give ChatGPT a real terminal on your Mac.
+[![CI](https://github.com/dcierra/darwinrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/dcierra/darwinrelay/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-[![CI](https://github.com/dcierra/mac-developer-bridge-private/actions/workflows/ci.yml/badge.svg)](https://github.com/dcierra/mac-developer-bridge-private/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+**Native macOS execution runtime for MCP agents: shell, PTY, background Chrome, and Accessibility-based desktop control.**
 
-Mac Developer Bridge turns a ChatGPT conversation into the reasoning layer for your actual Mac. It can run shell commands, edit files, start interactive terminal sessions, manage long-running jobs, read stored Codex threads without starting another Codex model turn, and optionally operate a configured Chrome profile **in the background without stealing focus**.
+DarwinRelay connects an MCP client to the Mac you are already using. It exposes structured local-machine capabilities without inserting another model loop between the client and macOS: unrestricted shell/filesystem access, interactive PTYs, long-running jobs, persisted Codex history, a managed background Chrome workspace, and native desktop control through Accessibility, ScreenCaptureKit, Vision and CoreGraphics.
 
-![Mac Developer Bridge showing ChatGPT reasoning through MCP into shell, PTY sessions, Codex history, and a live Mac](docs/assets/mac-developer-bridge-workflow.png)
+> [!CAUTION]
+> DarwinRelay is intentionally powerful. It is **not a sandbox** and does not implement a filesystem or shell-command allowlist. A connected client can act with the effective permissions of the macOS user running the bridge. Read [SECURITY.md](SECURITY.md) before exposing it beyond localhost.
 
-> **Example:** “Find the Codex session I was working on yesterday, inspect the live repo, fix CI, push the result, and tell me what changed.”
+## Why DarwinRelay
 
-That is the kind of workflow this project is built for.
+Many MCP servers expose one narrow API. DarwinRelay is designed as a local execution runtime for developer and computer-use workflows where the useful state already lives on the Mac:
 
-> [!WARNING]
-> Mac Developer Bridge deliberately gives an MCP client the effective permissions of your macOS user. It is **not sandboxed** and has no command or path allowlist. Read [SECURITY.md](SECURITY.md) before enabling it.
+- **Shell and files** — run commands, inspect or modify files, apply patches, and manage local processes.
+- **Real PTYs** — interactive shells, REPLs, SSH, sudo prompts, TUIs and long-running terminal programs.
+- **Native computer use** — semantic AX queries/actions, windows, dialogs, open/save panels, keyboard/mouse fallback, screenshots, OCR and visual waits.
+- **Background browser automation** — a dedicated Chrome extension-owned tab pool that can navigate, inspect, fill and click without routinely stealing focus.
+- **Codex history** — read persisted Codex threads without starting a new model turn.
+- **Remote MCP transport** — stdio locally, or the included authenticated HTTP/OAuth front end behind a tunnel you control.
+- **Fail-closed lifecycle** — explicit full-access unlock, audit logging, process reclamation, singleton menu ownership and rollback-aware app updates.
 
-## The idea
-
-ChatGPT has the reasoning. Your Mac has the source code, terminal, credentials, build tools, local services, and work in progress. Mac Developer Bridge connects the two over MCP without adding another model or agent loop in the middle.
+## Architecture
 
 ```mermaid
 flowchart LR
-    A[ChatGPT] -->|MCP| B[Mac Developer Bridge]
-    B --> C[Shell, Git and local CLIs]
-    B --> D[Filesystem]
-    B --> E[Real PTY sessions]
-    B --> F[Background jobs]
-    B --> G[Stored Codex history]
-    B --> H[Audit log and kill switch]
+    A[MCP client] --> B[DarwinRelay bridge]
+    B --> C[Shell / filesystem / jobs]
+    B --> D[PTY helper]
+    B --> E[Codex persisted history]
+    B --> F[MacUIHelper]
+    F --> G[Accessibility / ScreenCaptureKit / Vision / CGEvent]
+    B --> H[Chrome native host]
+    H --> I[DarwinRelay Chrome extension]
+    I --> J[Background DR tab pool]
 ```
 
-The bridge itself makes no OpenAI model call. It exposes deterministic local tools; ChatGPT supplies the reasoning. The Codex-history tools use read-only `codex app-server` methods and never call `turn/start`.
+The native desktop helper is deliberately short-lived rather than a privileged daemon. The menu app, `MacUIHelper`, and virtual cursor use stable code-signing identifiers so macOS TCC grants can survive normal rebuilds when a persistent signing identity is available.
 
-### What this unlocks
+## Requirements
 
-- Recover a stored Codex thread, inspect the repo it refers to, and continue the work from ChatGPT.
-- Run tests, builds, Git, package managers, database CLIs, AppleScript, and other tools already installed on your Mac.
-- Keep interactive shells and terminal programs alive through a real PTY instead of pretending stdin is a terminal.
-- Start long-running local jobs, inspect their logs later, and stop the whole process group.
-- Read and modify files anywhere your macOS user can access.
-- Optionally operate approved pages in a configured Chrome profile without bringing Chrome to the foreground.
-
-This is intentionally different from a local coding agent. There is no second reasoning loop. ChatGPT remains the agent; the Mac is the execution environment.
+- macOS 13 or newer
+- Node.js 18 or newer (Node.js 22 is used in CI)
+- Xcode Command Line Tools / `swiftc` for native desktop control and the menu app
+- Accessibility and Screen Recording permissions for native computer use
+- Google Chrome only if you want the managed `chrome_*` background workspace
+- `cloudflared` or another HTTPS tunnel only if you expose the HTTP transport remotely
+- Codex CLI only if you want `codex_thread_*` history tools
 
 ## Quick start
 
-For a personal ChatGPT account, the menu-bar app is the easiest path. You need macOS, Node.js 18+, `cloudflared`, a hostname/tunnel, and ChatGPT Developer mode.
+Clone the repository and build the menu app:
 
 ```bash
-git clone git@github.com:dcierra/mac-developer-bridge-private.git
-cd mac-developer-bridge
+git clone https://github.com/dcierra/darwinrelay.git
+cd darwinrelay
+npm run check
 ./menubar/build.sh
-open /Applications/MacDevBridge.app
+open /Applications/DarwinRelay.app
 ```
 
-Use **Start**, then **Copy ChatGPT Setup** from the menu-bar app. The detailed OAuth and Cloudflare setup is in [Connecting to ChatGPT](#connecting-to-chatgpt) and [DEPLOY.md](DEPLOY.md).
+The app appears in the macOS menu bar as **DR**. Grant the requested desktop permissions, then use **Start** for the HTTP/tunnel path you have configured.
 
-Workspace users who have access to OpenAI Secure MCP Tunnel can use `install.sh` instead. See [Transports](#transports).
-
-Want to see what to ask it to do? Start with the [copy-paste workflows](examples/README.md).
-
-This repository is the private `dcierra` product line. Its public upstream remains available through the configured `upstream` Git remote for selective synchronization.
-
-This is an independent open-source project and is not an official OpenAI or Cloudflare product. OpenAI, ChatGPT, Codex, and Cloudflare are trademarks of their respective owners.
-
-## Open source
-
-Mac Developer Bridge is released under the [MIT License](LICENSE). Bug reports and focused pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Security-sensitive reports should follow the guidance in [SECURITY.md](SECURITY.md) rather than being posted publicly.
-
-## Capabilities
-
-- Arbitrary shell commands through `/bin/zsh -lc`, under the logged-in macOS user
-- Detached background jobs with persistent stdout/stderr logs, status inspection, and process-group termination
-- Unrestricted file read, write, append, list, stat, copy, move, chmod, symlink, mkdir, and recursive delete
-- Unified-diff application through `git apply`
-- Stored Codex thread discovery and reading without resuming a thread or starting a Codex model turn
-- Paginated Codex turn retrieval for histories too large for a single response
-- Native macOS desktop observation through Accessibility/AXObserver plus display, window, and region ScreenCaptureKit screenshots
-- Semantic AX actions with observation binding, preconditions and bounded post-action verification
-- Targeted AX query and coordinate hit-testing, plus batched Accessibility reads and Enhanced User Interface support for complex apps
-- PID-targeted background mouse/keyboard input with focus preservation, verified foreground fallback, and an independent virtual AI cursor
-- Bounded `ui_sequence` bursts that execute deterministic multi-step native workflows in one helper process
-- Native window management, drag/drop, rich keyboard input, dialog/open-save-panel handling, Vision OCR and visual-change waits
-- Canonical multi-display Quartz coordinates and native screenshot results returned as MCP image content rather than base64 text blobs
-- Short-lived native helper processes rather than a resident desktop-control daemon
-- Local JSONL auditing
-- Outbound-only private connectivity through OpenAI Secure MCP Tunnel, or a plain-HTTP loopback front end that Cloudflare Tunnel publishes over HTTPS
-- Per-user persistence through a macOS LaunchAgent
-- Fail-closed unlock latch: `bridge.mjs` re-reads the unlock file before every tool call, so removing it refuses the next call and exits — unless the process inherited `MAC_DEV_BRIDGE_FULL_ACCESS_ACK`, which bypasses the file entirely
-- Local kill switch (`scripts/disable.sh`), which stops the front end, the bridge, the optional background-Chrome native host, detached `shell_start` job groups, interactive pty sessions, and federated child MCP servers, verifying the same targets it signalled
-
-Git, package managers, Vercel CLI, database CLIs, AppleScript, browser CLIs, build tools, and other installed programs remain reachable through `shell_exec`; the bridge deliberately maintains no command allowlist.
-
-## Tools
-
-| Tool | Purpose |
-|---|---|
-| `bridge_status` | Runtime identity, paths, permissions context, shell, audit mode, Codex binary, focus policy, and background-Chrome status |
-| `ui_status` | Inspect Accessibility/Screen Recording/input-event readiness and canonical display geometry |
-| `ui_app_list` | List running macOS applications |
-| `ui_window_list` | List CoreGraphics windows, bounds, and display routing |
-| `ui_tree` | Read a bounded AX tree with fingerprinted refs and an expiring observation id |
-| `ui_ax_at` | Resolve a screenshot/Quartz coordinate back to an actionable fingerprinted AX ref |
-| `ui_ax_query` | Search AX elements directly with optimized predicates and bounded fallback traversal |
-| `ui_cursor` | Move/show/hide an independent click-through AI cursor without moving the physical mouse |
-| `ui_screenshot` | Capture a display, window, or region as native MCP image content |
-| `ui_observe` | Return status + AX tree + optional targeted screenshot |
-| `ui_sequence` | Execute a bounded deterministic UI burst in one native-helper process |
-| `ui_wait_for` | Wait for semantic AX state with AXObserver-assisted bounded polling |
-| `ui_assert` | Assert semantic AX state immediately |
-| `ui_ocr` | Run Apple Vision OCR over a display/window/region |
-| `ui_wait_visual` | Wait for pixel change or visual stability without streaming frames |
-| `ui_app_launch` | Launch an application by path, bundle id, or name |
-| `ui_app_activate` | Bring a running application to the foreground |
-| `ui_action` | Perform semantic AX actions with optional precondition and postcondition verification |
-| `ui_window_action` | Focus/move/resize/minimize/restore/full-screen/close a native window |
-| `ui_mouse` | Mouse input with foreground or PID-targeted background delivery, focus guards and optional verified fallback |
-| `ui_drag_drop` | Drag between semantic refs or explicit coordinates |
-| `ui_keyboard` | Unicode/named/raw-key input with foreground or PID-targeted background delivery and optional verified fallback |
-| `ui_dialogs` | Inspect native sheets/system dialogs and buttons |
-| `ui_dialog_action` | Press default/cancel/named native dialog buttons |
-| `ui_file_dialog` | Navigate and confirm standard native open/save panels by absolute path |
-| `ui_clipboard_read` | Read the general pasteboard string/types |
-| `ui_clipboard_write` | Replace the general pasteboard with text |
-| `browser_cdp_status` | Inspect the explicit opt-in Browser Harness raw-CDP backend |
-| `browser_cdp_call` | Call one raw CDP `Domain.method` through Browser Harness (disabled by default; blocked in Strict mode) |
-| `browser_cdp_session` | Inspect/select the Browser Harness target/session |
-| `browser_cdp_events` | Drain Browser Harness CDP events |
-| `chrome_workspace_status` | Inspect the extension-owned `MDB` Chrome group and reusable background-tab pool; no website grant required |
-| `chrome_workspace_setup` | Create or expand the `MDB` pool once while Chrome is already foreground |
-| `chrome_tabs` | List tabs in the configured Chrome profile without activating Chrome; scoped only when Strict approvals is on |
-| `chrome_open` | Lease an idle tab from the persistent `MDB` group and open a URL without creating a new tab |
-| `chrome_navigate` | Navigate an approved tab without selecting it |
-| `chrome_snapshot` | Read visible text and interactive elements from an approved tab |
-| `chrome_click` | Click an element in an approved tab without foregrounding Chrome |
-| `chrome_fill` | Fill inputs, textareas, selects, or contenteditable fields in the background |
-| `chrome_close` | Release an `MDB` workspace tab back to the idle pool, or close a non-workspace background tab |
-| `shell_exec` | Run any foreground shell command, optionally with cwd, env, stdin, timeout, and output cap |
-| `shell_start` | Start a detached long-running process |
-| `shell_job_status` | Inspect running state and log tails |
-| `shell_job_list` | List persistent job metadata |
-| `shell_job_kill` | Signal a background process group |
-| `fs_read` | Read text or base64 with offset pagination |
-| `fs_write` | Atomic replace, create, append, or binary write |
-| `fs_list` | Recursive or non-recursive directory listing |
-| `fs_stat` | lstat metadata and symlink target |
-| `fs_manage` | mkdir, remove, move, copy, chmod, or symlink |
-| `apply_patch` | Apply or check a unified diff with `git apply` |
-| `codex_thread_read` | Read a stored Codex thread without resuming it |
-| `codex_thread_list` | Search and page stored Codex threads |
-| `codex_thread_turns_list` | Page stored turns with full, summary, or omitted items |
-| `audit_tail` | Read the local bridge audit tail |
-
-### Native desktop control
-
-The private line builds `MacUIHelper` from Swift sources under `desktop-helper/`. The helper is a bounded **short-lived process per tool call** using AppKit, Accessibility/AXObserver, ScreenCaptureKit, CoreGraphics, Vision and NSPasteboard. It is advertised only on macOS when the executable is available; a failed helper build leaves the original shell/filesystem/PTY/browser bridge usable.
-
-The preferred workflow is semantic-first: `ui_observe`/`ui_tree` or targeted `ui_ax_query` → fingerprinted AX ref → `ui_action(precondition=..., verify=...)` → `ui_wait_for`/`ui_assert`. If vision/OCR identifies only a coordinate, `ui_ax_at` hit-tests that point back into an actionable AX ref before falling back to raw input. Each observation carries a short-lived in-memory `observationId`; callers can bind consequential actions to refs that were actually present in that observation. If AppKit only re-indexes child arrays, the helper can recover a ref by finding exactly one unchanged fingerprint; changed, missing, or ambiguous targets fail as `UI_ELEMENT_STALE`. Mismatched semantic preconditions fail as `UI_PRECONDITION_FAILED`, and failed postconditions as `UI_POSTCONDITION_FAILED`.
-
-`ui_mouse` and `ui_keyboard` accept `input_mode=auto|background|foreground`. With a target `pid`, `auto` tries PID-targeted CoreGraphics delivery first so the physical cursor and foreground app can remain untouched. Because some applications silently reject background events, foreground fallback occurs only when the caller supplied a semantic `verify` postcondition, that background attempt failed verification, and fallback was not disabled. Explicit `background` mode never activates the target automatically. `ui_sequence` groups deterministic steps into one bounded helper process to reduce MCP round trips and UI races.
-
-For poor-Accessibility surfaces such as RDP/canvas/custom renderers, use targeted `ui_screenshot` or local `ui_ocr`, then `ui_mouse`/`ui_drag_drop`/`ui_keyboard`, followed by `ui_wait_visual` or a new observation. Screenshots can target a display, desktop-independent window, or region. Pointer/region coordinates use Quartz global display space; explicit display ids allow display-local coordinates on multi-monitor setups.
-
-Window control and native panels are first-class: `ui_window_action` handles focus/geometry/minimize/full-screen/close, while `ui_dialogs`, `ui_dialog_action`, and `ui_file_dialog` handle standard native sheets and NSOpenPanel/NSSavePanel flows. A deterministic AppKit fixture exercises these operations locally.
-
-Build/check the native pieces without installing the menu-bar app:
+For source-only local MCP usage, the bridge can also be run directly. Full access must be explicitly acknowledged:
 
 ```bash
-./scripts/build-mac-ui-helper.sh
-./scripts/check-mac-ui-helper.sh
-./scripts/build-mac-ui-cursor.sh
-./scripts/check-mac-ui-cursor.sh
-./scripts/build-desktop-fixture.sh
-./scripts/desktop-doctor.sh
+export DARWINRELAY_FULL_ACCESS_ACK=I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS
+node bridge.mjs
 ```
 
-macOS TCC remains authoritative. The signed `MacUIHelper` never edits TCC; Accessibility, Screen Recording and permission to post synthetic input events are checked independently. Production builds embed the helper and virtual cursor under `MacDevBridge.app/Contents/Helpers`, sign all three executables with one stable code-signing identity, and route the bridge to those exact nested binaries. The menu-bar AX/Screen/Input indicators are read from the real helper process rather than from the menu app, so they reflect the code that actually controls the desktop. Clicking the Desktop permission row asks macOS to present supported helper permission prompts. Text supplied to `ui_keyboard`, `ui_clipboard_write`, and AX `set_value` is never written verbatim to the MDB audit log.
+The default runtime state lives under:
 
-The helper intentionally remains short-lived: measured startup on the development M4 host was ~50 ms median / ~56 ms p95 after warmup, so a resident daemon would add lifecycle and kill-switch complexity without a material benefit.
+```text
+~/Library/Application Support/DarwinRelay
+~/Library/Logs/DarwinRelay
+```
 
-See [`docs/DESKTOP_CONTROL.md`](docs/DESKTOP_CONTROL.md) for the complete native-control contract and safety model.
+Use environment variables such as `DARWINRELAY_DATA_DIR`, `DARWINRELAY_LOG_DIR`, `DARWINRELAY_SHELL`, and `DARWINRELAY_AUDIT_MODE` to isolate development/test instances.
 
-### Background Chrome without stealing focus
+## For AI and coding agents
 
-On macOS, the optional Background Browser integration operates one **explicitly selected Chrome profile**, while routine automation happens through a small local extension instead of AppleScript UI automation or Chrome DevTools Protocol page selection. A normal signed-in profile is pinned to its email/Gaia identity. An intentionally isolated, signed-out profile can instead be selected explicitly as `dedicated-local`; that mode is useful when browser state should be kept separate from the operator's everyday profile.
+This repository includes agent-oriented documentation on purpose. If you give the repository to Codex, Claude, ChatGPT or another coding agent, point it at **`AGENTS.md` first**. That file describes the repository map, invariants, development commands, testing expectations, signing/browser rules and release constraints.
 
-This is intentionally opt-in because authenticated browser control is powerful. Install the native host once, then load the unpacked extension once in Chrome:
+For an agent operating an already-installed DarwinRelay runtime rather than modifying source, use **`docs/AGENT_OPERATIONS.md`**. It contains the complete tool-family map, preferred decision order, common failure states and safe runtime workflows. **`docs/ARCHITECTURE.md`** describes component/data flow and trust boundaries for deeper reasoning.
+
+## Native desktop control
+
+DarwinRelay prefers semantic Accessibility operations and uses visual/raw input as a fallback. Core capabilities include:
+
+- `ui_observe`, `ui_tree`, `ui_ax_query`, `ui_ax_at`
+- fingerprinted AX refs with stale-ref detection
+- `ui_action`, `ui_wait_for`, `ui_assert`
+- `ui_app_*`, `ui_window_*`, dialogs and file panels
+- ScreenCaptureKit screenshots and Vision OCR
+- background PID-targeted input where macOS supports it, with semantic verification and bounded foreground fallback
+- `ui_sequence` for deterministic multi-step native bursts
+- a click-through virtual AI cursor that does not move the physical pointer
+
+See [docs/DESKTOP_CONTROL.md](docs/DESKTOP_CONTROL.md) for the control model and limitations.
+
+## Background Chrome workspace
+
+DarwinRelay uses an unpacked Chrome extension plus Native Messaging. The public extension identity is stable; the expected extension id is:
+
+```text
+pfhahlehpahegefejooendokpkklgmgd
+```
+
+The installer creates or reuses a **signed-out local Chrome profile named `DarwinRelay` by default**. This keeps agent browsing state separate from an everyday Google profile:
 
 ```bash
-# Recommended for an isolated profile; accepts the Chrome display name or directory.
-./scripts/install-background-chrome.sh --profile 'Dedicated MDB'
-
-# Without --profile, MDB uses Chrome's last-used profile and requires it to be signed in.
+# Recommended/default: dedicated local profile named DarwinRelay
 ./scripts/install-background-chrome.sh
+
+# Explicit alternatives only when you want them
+./scripts/install-background-chrome.sh --profile 'Some Existing Profile'
+./scripts/install-background-chrome.sh --use-current-profile
 ```
 
-Then open **that selected profile** in Chrome, visit `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select this repository's `chrome-extension/` directory. The expected extension id is `pcebfblnmcappinbenkmddjdapaoajgm`. Do not load the MDB extension into other profiles when using `dedicated-local` mode. The installer never silently falls back from an explicitly selected or last-used signed-out profile to another signed-in profile.
+The default profile is created without deleting or modifying browsing data in other profiles. **If the DarwinRelay profile does not exist yet, quit Chrome once before running the installer** so Chrome cannot concurrently rewrite its `Local State`; after the profile exists, normal reinstalls can run while Chrome is open. Uninstalling DarwinRelay deliberately leaves that profile in place because browser profile contents are user data.
 
-The native-messaging runtime itself is copied into `$DATA_DIR/chrome-native-host.mjs` and launched from Application Support. This avoids making Chrome the TCC-responsible process for executable source files stored under protected folders such as `~/Documents`; the repository remains the source of truth, and rerunning the installer refreshes the installed copy.
+Then, in **the selected profile only**, open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select this repository's `chrome-extension/` directory. You can pass `--open` to the installer for this one-time setup step.
 
-The extension keeps a Chrome-native tab group named **`MDB`**. By default it contains four extension-owned idle tabs. They are created only while Chrome is already foreground, then leased and reused for routine work. The group is collapsed when idle and expands while one or more tabs are leased. This mirrors the managed-group approach used by browser-agent extensions while avoiding a macOS/Chrome quirk measured on this project: even `chrome.tabs.create({ active:false })` can bring Chrome to the foreground.
+The extension owns a Chrome-native tab group named **DR**. Routine `chrome_open` calls lease pre-created idle tabs instead of creating arbitrary foreground tabs. `chrome_close` returns workspace tabs to the pool.
 
-The pool now self-heals. If Chrome or the extension restarts and the `MDB` group is missing, the extension recreates the default four-tab pool the next time you **naturally focus Chrome**. It never activates Chrome just to repair itself. You can also force setup while Chrome is already foreground by calling `chrome_workspace_setup` (default pool size: 4).
+### Browser security model
 
-`chrome_workspace_status` is grantless because it only reads extension-owned local workspace state. `chrome_workspace_setup` is also grantless because it creates only extension-owned idle pages; it refuses to create or expand the pool unless Chrome is already focused rather than stealing focus itself. Legacy/internal `tabs.open` callers are routed to the same `workspace.open` lease path, so they cannot create loose tabs outside `MDB`; if the pool is unavailable while Chrome is background, the open fails closed until the group can be repaired.
+Relaxed approvals are the default. Normal HTTP/HTTPS work through the configured `chrome_*` workspace does not need a per-site terminal grant. Enabling **Strict approvals** in the menu app restores scoped URL grants and one-use app-scoped native mutation approvals.
 
-**Relaxed access is the default.** Normal HTTP/HTTPS work through the configured `MDB` Chrome profile does not require a terminal approval command or per-site allowlist. This is intentional: Mac Developer Bridge already exposes unrestricted shell/file authority as the logged-in macOS user, and the useful default is for browser execution to match that operator-chosen trust level while remaining background-first.
+Direct Chrome automation through shell/AppleScript/JXA remains blocked by the bridge so normal web work stays on the managed background path. The separate native `ui_*` surface can still interact with foreground Chrome UI when browser/OS security surfaces genuinely require it.
 
-Relaxed approval does **not** relax Chrome routing. Direct Chrome control through `shell_exec`/`shell_start` — AppleScript, JXA, direct Chrome executable launches, or shell `open` of an HTTP/HTTPS URL (including `open -g`) — is always refused with `CHROME_BACKGROUND_REQUIRED`, in both Relaxed and Strict modes. Browser work must use the `chrome_*` tools and the managed `MDB` group. This keeps the no-focus-stealing behavior structural instead of depending on which approval mode is selected.
+An optional raw Browser Harness/CDP adapter exists behind `DARWINRELAY_ADVANCED_BROWSER=1`. It is disabled by default and fails closed under Strict approvals because arbitrary CDP cannot be soundly reduced to URL scopes.
 
-If you want a tighter browser/app workflow, enable **Strict approvals** from the Mac Developer Bridge menu-bar app. The toggle is live; no restart is needed. In Strict mode, `chrome-background` approvals are additive and shared across every ChatGPT session connected to the bridge until each grant expires:
+## HTTP / OAuth transport
 
-```bash
-./scripts/approve-personal-browser.sh \
-  --provider chrome-background \
-  --url-pattern 'https://www.producthunt.com/*' \
-  --url-pattern 'https://www.reddit.com/*' \
-  --ttl 900
-```
+`mcp-http.mjs` binds to loopback and supports the MCP HTTP transport with a static bearer token plus OAuth 2.1 flows used by remote MCP clients. A tunnel such as Cloudflare can publish the loopback service over HTTPS.
 
-A normal workflow is:
-
-1. `chrome_open` an approved URL into an idle tab leased from the `MDB` group.
-2. `chrome_snapshot` to read the page and get stable-enough selectors for visible controls.
-3. `chrome_fill` / `chrome_click` / `chrome_navigate` as needed.
-4. `chrome_close` to return the workspace tab to its idle extension page and release the lease.
-
-Profile binding is always enforced. Signed-in mode pins the reported email and Gaia id. `dedicated-local` mode requires the extension to remain signed out and relies on loading the unpacked extension only in the explicitly selected profile; Chrome's extension identity API does not expose the profile directory/name, so this is an operational isolation rule rather than a same-user security boundary. If the dedicated profile is later signed in, the host refuses it until the installer is rerun. In relaxed mode the extension permits normal HTTP/HTTPS sites without a per-site grant, including explicit ports such as local development servers. In Strict mode, each `chrome-background` approval is stored as its own mode-0600 file under `$DATA_DIR/chrome-background-grants/`, expires after at most 15 minutes, and is merged with other still-live approvals. Expired files are pruned automatically and URL patterns are enforced inside Chrome. Federated personal-browser providers keep their separate single-use behavior.
-
-What background mode does **not** promise: CAPTCHAs, native browser/OS permission dialogs, file pickers, downloads requiring a trusted user gesture, passkeys, and other browser security UI may require a foreground/manual step. The bridge reports that limitation rather than silently activating Chrome. This is also deliberately narrower than arbitrary page JavaScript or network-header capture; see [SECURITY.md](SECURITY.md).
-
-To remove the integration:
+A minimal local front end looks like:
 
 ```bash
-./scripts/uninstall-background-chrome.sh
-```
+mkdir -p "$HOME/Library/Application Support/DarwinRelay"
+openssl rand -hex 32 > "$HOME/Library/Application Support/DarwinRelay/http-token"
+chmod 600 "$HOME/Library/Application Support/DarwinRelay/http-token"
 
-### Optional raw CDP through Browser Harness
-
-The built-in `chrome_*` extension workspace remains the default browser path. A second, deliberately broader backend can be enabled for advanced DevTools operations such as network inspection, downloads/uploads or CDP methods not represented by the managed workspace:
-
-```bash
-export MAC_DEV_BRIDGE_ADVANCED_BROWSER=1
-# Optional when Browser Harness uses a non-default daemon/socket:
-# export MAC_DEV_BRIDGE_ADVANCED_BROWSER_NAME=default
-# export MAC_DEV_BRIDGE_ADVANCED_BROWSER_SOCKET="$HOME/.config/browser-harness/runtime/bu-default.sock"
-```
-
-MDB talks directly to an **already-running Browser Harness daemon** over its same-user Unix socket; it does not execute arbitrary Browser Harness Python and does not install/start Browser Harness automatically. The `browser_cdp_*` tools are hidden until the explicit opt-in is present. Raw CDP is a separate authority surface and does not weaken or replace the existing `chrome_*` managed-tab routing. When **Strict approvals** is enabled, raw CDP/session/event tools fail closed because arbitrary CDP methods cannot be soundly reduced to MDB's URL-pattern grants; use `chrome_*` in that mode. Raw CDP `params` are always redacted from the MDB audit log, including full audit mode.
-
-### Desktop apps and focus
-
-For native macOS apps, MDB still **prefers** background-capable APIs or web paths because Accessibility automation can require the target application to become frontmost. The dedicated `ui_*` surface now provides a structured path when native foreground interaction is genuinely necessary.
-
-Chrome web-page work should still use the configured `MDB` background group whenever possible. Direct Chrome AppleScript/JXA and shell `open` routing remain blocked by `shell_exec`/`shell_start`. The native `ui_*` surface is intentionally broader in this private full-control line, however: it can interact with a foreground Chrome window when browser security UI or another OS-level surface cannot be handled by the background extension. That is a deliberate capability expansion, not a no-focus-stealing guarantee.
-
-Prefer, in order:
-
-1. an API or MCP connector for the service;
-2. the service's web app through the configured `MDB` Chrome group;
-3. semantic native `ui_tree` / `ui_action` operations;
-4. screenshot + mouse/keyboard fallback only when foreground interaction is genuinely required.
-
-When **Strict approvals** is enabled, native foreground app control is blocked unless the operator creates a one-use, app-scoped grant:
-
-```bash
-./scripts/approve-foreground-gui.sh --app Slack --ttl 60
-```
-
-Strict mode is optional and off by default. The menu-bar checkbox changes it live.
-
-### Interactive terminal sessions
-
-A real pty, allocated by `lib/ptyhelper.pl` (core Perl, no dependency added). Advertised only when the helper runs on this host; otherwise the six tools are absent rather than broken.
-
-| Tool | Purpose |
-|---|---|
-| `pty_start` | Start a program on a real terminal and return a session id |
-| `pty_read` | Read the transcript from a byte cursor, optionally long-polling |
-| `pty_write` | Send keystrokes, including control characters |
-| `pty_resize` | Change the window size, confirmed by a kernel read-back |
-| `pty_signal` | Signal the session's process group |
-| `pty_close` | End the session and reclaim it |
-
-Limits that will be visible in normal use:
-
-- **Line length.** While the terminal is in canonical mode — the default, and what every interactive prompt uses — the line discipline **discards** an input line of 1024 bytes or more instead of truncating it. `pty_write` refuses such a write with `PTY_WRITE_CANON_LIMIT` rather than reporting bytes the program will never see. Bytes accumulate across calls until a `\r` or `\n`, so chunking does not evade it. Send lines of at most 1023 bytes. A session that has put its terminal in raw mode is checked and allowed.
-- **Concurrency.** The session cap is taken, not merely checked, so concurrent `pty_start` calls cannot exceed it.
-- **Retention.** Each session keeps the last `MAC_DEV_BRIDGE_PTY_RING_BYTES` of output in a fixed ring; `pty_read` reports `lostBytes` when a cursor falls behind it.
-- **Containment.** See SECURITY.md — `pty_close` reports `leaderGroupGone`, `ttyProcessesKilled` and `uncontainedPids` separately, and `containmentVerified` is true only when nothing survived.
-
-### Federated child MCP servers
-
-If a provider registry is configured, each provider's tools are advertised with a `key__tool` prefix and proxied. There is no built-in provider: the registry is operator-supplied. Personal-browser-profile mode requires a per-use operator grant — see SECURITY.md.
-
-## Bridge environment
-
-These are read by `bridge.mjs` on both transports.
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `MAC_DEV_BRIDGE_DATA_DIR` | `~/Library/Application Support/MacDeveloperBridge` | State, job metadata, federation roots. |
-| `MAC_DEV_BRIDGE_LOG_DIR` | `~/Library/Logs/MacDeveloperBridge` | Log directory. |
-| `MAC_DEV_BRIDGE_AUDIT_LOG` | `$LOG_DIR/audit.jsonl` | Audit JSONL path. |
-| `MAC_DEV_BRIDGE_AUDIT_MODE` | `metadata` | `off`, `metadata`, or `full`. `full` records tool arguments; see the caveat in SECURITY.md. |
-| `MAC_DEV_BRIDGE_UNLOCK_FILE` | `$DATA_DIR/FULL_ACCESS_ENABLED` | The revocable unlock latch. Re-read before **every** tool call. |
-| `MAC_DEV_BRIDGE_UNLOCK_RECHECK_MS` | `3000` | How often the latch is re-read while a pty session or a federated child exists and the client is silent. Bounds how long either can outlive a removed unlock file. |
-| `MAC_DEV_BRIDGE_SHELL` | login shell | Shell used for `shell_exec`/`shell_start`. |
-| `MAC_DEV_BRIDGE_UI_HELPER` | `bin/MacUIHelper` beside `bridge.mjs` | Optional override for the native Swift desktop-control helper. `ui_*` tools are hidden if it is unavailable. |
-| `MAC_DEV_BRIDGE_UI_CURSOR_HELPER` | `bin/MacUICursorOverlay` beside `bridge.mjs` | Optional override for the click-through virtual AI cursor overlay. Desktop control remains usable if it is unavailable. |
-| `MAC_DEV_BRIDGE_ADVANCED_BROWSER` | off | Explicitly opt into the separate Browser Harness raw-CDP backend (`1`/`true`). |
-| `MAC_DEV_BRIDGE_ADVANCED_BROWSER_NAME` | `default` | Browser Harness daemon name used to derive its standard Unix socket. |
-| `MAC_DEV_BRIDGE_ADVANCED_BROWSER_RUNTIME_DIR` | `~/.config/browser-harness/runtime` | Override Browser Harness runtime directory used for socket discovery. |
-| `MAC_DEV_BRIDGE_ADVANCED_BROWSER_SOCKET` | derived from runtime/name | Exact Browser Harness Unix socket override. |
-| `MAC_DEV_BRIDGE_DEFAULT_OUTPUT_BYTES` | `1000000` | Default per-call output cap. |
-| `MAC_DEV_BRIDGE_MAX_OUTPUT_BYTES` | `8000000` | Ceiling a call may request. |
-| `MAC_DEV_BRIDGE_PTY_PERL` | `/usr/bin/perl` | Interpreter for the pty helper. |
-| `MAC_DEV_BRIDGE_PTY_HELPER` | `lib/ptyhelper.pl` beside `bridge.mjs` | Helper script path. |
-| `MAC_DEV_BRIDGE_PTY_MAX_SESSIONS` | `8` (1–64) | Live session cap. `kern.tty.ptmx_max` is 511 **system-wide**, so this protects the operator's own Terminal.app, not just this process. |
-| `MAC_DEV_BRIDGE_PTY_RING_BYTES` | `262144` (4 KiB–4 MB) | Per-session output retention. Total retention is this times the session cap. |
-| `MAC_DEV_BRIDGE_PTY_IDLE_TIMEOUT_MS` | `900000` (1 s–1 h) | Idle reclaim window, and a **ceiling**: `pty_start` may request a shorter one, never a longer. A live session's effective value is in `bridge_status`. |
-| `MAC_DEV_BRIDGE_PTY_MAX_LIFETIME_MS` | `28800000` (5 s–24 h) | Hard ceiling, enforced even on an actively used session. |
-| `MAC_DEV_BRIDGE_PTY_START_TIMEOUT_MS` | `5000` | How long `pty_start` waits for the helper to report a real pty. |
-| `MAC_DEV_BRIDGE_MCP_SERVERS` | — | Path to a child-MCP provider registry JSON file. |
-| `MAC_DEV_BRIDGE_MCP_SERVERS_JSON` | — | The same registry inline. Takes precedence. |
-| `MAC_DEV_BRIDGE_MCP_START_DEADLINE_MS` | `15000` (1 s–120 s) | Wall-clock ceiling on one provider's whole startup — handshake, grant check, and every `tools/list` page. A provider that exceeds it is abandoned rather than left holding up the tool surface. |
-| `MAC_DEV_BRIDGE_MCP_PING_IDLE_MS` | `30000` | Idle interval after which a federated child is pinged; a child that fails the ping is treated as hung and restarted. |
-| `MAC_DEV_BRIDGE_PERSONAL_APPROVAL_FILE` | `$DATA_DIR/PERSONAL_BROWSER_APPROVED` | Legacy/federated single-use personal-browser grant path. A legacy `chrome-background` grant here is imported into the shared pool for backward compatibility. |
-| `MAC_DEV_BRIDGE_BACKGROUND_CHROME_GRANT_DIR` | `$DATA_DIR/chrome-background-grants` | Directory of additive, expiring background-Chrome URL grants shared across all sessions and reloaded after bridge restarts. |
-| `MAC_DEV_BRIDGE_SETTINGS_FILE` | `$DATA_DIR/settings.json` | Operator settings. `strictApprovals` defaults to `false` when the file/key is absent. The menu-bar app manages it. |
-| `MAC_DEV_BRIDGE_FOREGROUND_GUI_APPROVAL_FILE` | `$DATA_DIR/FOREGROUND_GUI_APPROVED` | Strict-mode single-use, app-scoped foreground-GUI approval. |
-| `MAC_DEV_BRIDGE_CHROME_SOCKET` | `$DATA_DIR/chrome-background.sock` | Unix socket between `bridge.mjs` and the optional Chrome native-messaging host. Mode 0600 inside the mode-0700 data directory. |
-| `MAC_DEV_BRIDGE_CHROME_NATIVE_PID_FILE` | `$DATA_DIR/chrome-native-host.pid` | PID record used by the kill switch for the optional Chrome native host. |
-| `MAC_DEV_BRIDGE_FULL_ACCESS_ACK` | — | Environment form of the acknowledgement. **Not** revocable; see below. |
-
-## What “full access” means
-
-The MCP server runs with the effective permissions of the macOS account that launches it. It has no path allowlist, shell-command allowlist, sandbox, or internal per-command approval gate.
-
-macOS still enforces TCC privacy controls, Full Disk Access, ACLs, SIP, Keychain access controls, and `sudo` authentication. Non-interactive MCP shell calls do not magically provide a sudo password or a terminal UI. Configure passwordless `sudo` only when you deliberately want that separate escalation.
-
-The bridge refuses to start until a deliberate acknowledgement exists, and re-checks it before every tool call — so removing the acknowledgement file both prevents future starts and stops a running bridge at its next call.
-
-The environment form (`MAC_DEV_BRIDGE_FULL_ACCESS_ACK`) is deliberately **not** revocable that way: a bridge that inherited it never reads the file, so deleting the file does not stop it. The Install steps below export that variable, so a bridge started from such a shell is only stoppable by stopping the process. The menu bar app strips it from its children for exactly this reason.
-
-ChatGPT action permissions and confirmation behavior are separate. The MCP server advertises write and destructive annotations honestly and cannot bypass restrictions enforced by the ChatGPT product or workspace.
-
-## Transports
-
-The bridge speaks MCP over stdio. Two transports can carry it to ChatGPT.
-
-**OpenAI Secure MCP Tunnel** (`install.sh`, documented below) is outbound-only
-and needs no public endpoint. It requires the Tunnel connection type in
-ChatGPT's plugin dialog, which is **not available on personal accounts** — the
-option renders but is disabled.
-
-**Cloudflare Tunnel + Server URL** (`mcp-http.mjs`) is the fallback when Tunnel
-is unavailable. `mcp-http.mjs` fronts the bridge with Streamable HTTP on
-`127.0.0.1:8787` behind OAuth 2.1 (and a static bearer for other clients),
-and `cloudflared` publishes it:
-
-```bash
-export MAC_DEV_BRIDGE_HTTP_TOKEN="$(openssl rand -hex 32)"
+export DARWINRELAY_HTTP_TOKEN_FILE="$HOME/Library/Application Support/DarwinRelay/http-token"
 node mcp-http.mjs
 ```
 
-> ChatGPT's plugin dialog offers Authentication: **OAuth**, **No Auth**, or
-> **Mixed** — there is no API-key/bearer field. `mcp-http.mjs` therefore implements
-> an OAuth 2.1 authorization server as well, and that is how you connect ChatGPT.
-> See **Connecting to ChatGPT** below. The static bearer token still works for any
-> client that can send an `Authorization: Bearer` header.
+Do not expose the HTTP endpoint without reading the remote-access threat model in [SECURITY.md](SECURITY.md). A credential accepted by this front end ultimately gates local code execution as your desktop user.
 
-The host is pinned to loopback and the path to `/mcp`, deliberately — the only
-intended peer is `cloudflared` on the same machine.
+The repository also retains the OpenAI Secure MCP Tunnel installer inherited from the original project for users who prefer that transport. See [DEPLOY.md](DEPLOY.md).
 
-Environment:
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `MAC_DEV_BRIDGE_HTTP_TOKEN` | — | Bearer token. Minimum 24 bytes, printable ASCII. Refuses to start without one. |
-| `MAC_DEV_BRIDGE_HTTP_TOKEN_FILE` | — | Read the token from a mode-0600 file instead, keeping it out of `ps eww`. Takes precedence. |
-| `MAC_DEV_BRIDGE_HTTP_PORT` | `8787` | Loopback port. |
-| `MAC_DEV_BRIDGE_HTTP_TIMEOUT_MS` | `600000` | Per-request ceiling, for long `shell_exec` calls. |
-| `MAC_DEV_BRIDGE_ENTRY` | `bridge.mjs` beside `mcp-http.mjs` | Test-only seam for substituting a stub bridge. Changing it means `scripts/disable.sh` will not recognise the child. |
-| `MAC_DEV_BRIDGE_PUBLIC_URL` | derived from `Host` | Pins the OAuth issuer. Pin it: `Host` is client-controllable, and the issuer must match what the client discovered. |
-| `MAC_DEV_BRIDGE_OAUTH_CLIENT_ID` | generated | The client id pasted into ChatGPT. Stable across restarts. |
-| `MAC_DEV_BRIDGE_OAUTH_REDIRECT_URIS` | — | Extra exact-match callbacks, comma-separated. Appends to the built-ins. |
-| `MAC_DEV_BRIDGE_OAUTH_CLIENT_SECRET` | — | Optional second factor on `/token`, enforced via `client_secret_post` or `client_secret_basic`. Put the same value in ChatGPT's OAuth Client Secret field. Scrubbed from child environments. |
-| `MAC_DEV_BRIDGE_BODY_IDLE_TIMEOUT_MS` | `30000` | Drops a request whose body **stalls** this long. Idle, not total, so a slow-but-progressing upload is not truncated. |
-| `MAC_DEV_BRIDGE_MAX_BUFFERED_BYTES` | `100663296` (96 MiB) | Global budget for buffered request bodies. Exceeding it sheds load with a retryable 503. |
-
-Understand the difference in exposure before choosing this one. The Tunnel
-transport makes only outbound connections. This one publishes an HTTPS endpoint
-that fronts unrestricted shell access, with a single bearer token as the entire
-barrier. Rotate the token if it is ever disclosed, and consider Cloudflare
-Access in front of it for a second factor.
-
-`install.sh` remains specific to OpenAI Secure MCP Tunnel, but the HTTP/Cloudflare
-path now has its own persistence layer. After building/installing the menu app, run
-`scripts/install-http-autostart.sh`. It writes a per-user LaunchAgent that starts
-`MacDevBridge.app --start` at login and restarts it after an abnormal exit. When a
-MacDevBridge instance is already running, the installer deliberately does **not**
-load a second copy in the current session; the LaunchAgent takes ownership on the
-next login. `scripts/uninstall-http-autostart.sh` removes it, and the global
-`scripts/disable.sh` boots out either MDB LaunchAgent before containment checks.
-
-## Connecting to ChatGPT
-
-ChatGPT's plugin dialog offers three Authentication choices — **OAuth**, **No
-Auth**, **Mixed** — and no API-key/bearer field, so the static bearer token has
-nowhere to be entered. `mcp-http.mjs` therefore implements an OAuth 2.1
-authorization server, and that is how ChatGPT connects.
-
-Fill in the dialog as follows:
-
-| Field | Value |
-|---|---|
-| Connection | Server URL |
-| Server URL | `https://<hostname>/mcp` |
-| Authentication | OAuth |
-| Registration method | User-Defined OAuth Client |
-| OAuth Client ID | logged at startup, or set `MAC_DEV_BRIDGE_OAUTH_CLIENT_ID` |
-| OAuth Client Secret | leave blank |
-| Token endpoint auth method | `none` |
-| Default scopes | `mcp` |
-| OIDC enabled | **untick** |
-
-The menu bar app's **Copy ChatGPT Setup** produces this list pre-filled.
-
-Untick OIDC because `/.well-known/openid-configuration` is served only as an alias
-of the OAuth metadata and deliberately omits every signing and subject field. No ID
-token is issued, so an OIDC-strict client should abort rather than demand one.
-
-ChatGPT then opens a consent page served by your own machine. It names the exact
-callback it will redirect to and asks for the bridge token, which is how it knows
-the approval came from you. **Read the "Will redirect to" line before approving** —
-any `/connector/oauth/<token>` path is a valid ChatGPT connector, including one
-someone else created.
-
-Use a **named** Cloudflare tunnel. A quick tunnel's hostname changes on every start,
-and that hostname is the OAuth issuer — so a restart between discovery and callback
-makes the issuer stop matching what ChatGPT recorded, and a strict client drops the
-callback silently. A named tunnel also means creating the connector once instead of
-every run.
-
-Endpoints served: `/.well-known/oauth-protected-resource`,
-`/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration`
-plus `/.well-known/oauth-protected-resource/mcp`,
-`/.well-known/oauth-authorization-server/mcp`, `/.well-known/openid-configuration/mcp`
-and `/mcp/.well-known/openid-configuration` — seven paths in total, since the
-`/mcp/`-prefixed form exists only for `openid-configuration`. Then `/authorize`,
-`/token`, `/revoke`, `/revoke-all`, and `/healthz`. A 401
-from `/mcp` carries `WWW-Authenticate: Bearer resource_metadata="…"`, which is what
-lets a client discover the rest.
-
-## Menu bar app (HTTP transport)
-
-`menubar/` builds a small AppKit status-bar app that owns the two processes this
-transport needs and surfaces the three things you actually use: the public URL,
-the bearer token, and whether the endpoint is answering.
+## Development
 
 ```bash
-./menubar/build.sh          # signed build + atomic install to /Applications
-open /Applications/MacDevBridge.app
-# Optional persistence across login/reboot:
-./scripts/install-http-autostart.sh
+npm run check
+npm run test:core
+npm run test:desktop
+npm run test:lifecycle
+# or all groups
+npm test
 ```
 
-The build installs to `/Applications` (falling back to `~/Applications`) because
-Launchpad and Spotlight do not surface apps living in `~/Downloads`. Replacement
-is staged and moved into place atomically; a running menu app/front end is not
-killed, one `.MacDevBridge.app.rollback` bundle is retained, and the installer
-refuses a changed designated signing requirement unless explicitly overridden.
-For production updates use `scripts/deploy-menubar-update.sh`; rollback is
-`scripts/rollback-menubar-update.sh`. The bundle locates `mcp-http.mjs` via
-`MAC_DEV_BRIDGE_HOME`, then a package next to itself, then a path baked into
-`Info.plist` at build time.
+The public CI intentionally exposes separate checks instead of one opaque `test` job:
 
-The menu gives you: current status, the tunnel mode, **Copy Server URL**, **Copy
-OAuth Client ID**, **Copy ChatGPT Setup** (the whole dialog filled in, in order),
-**Copy Bearer Token**, Start/Stop, a live **Strict approvals** checkbox (off by default), Rotate Token, Open Logs, and Quit.
+- **Static checks** — syntax/native build validation and full-history gitleaks scan
+- **Core & protocol tests** — MCP, HTTP/OAuth, PTY, federation, browser and adversarial tests
+- **Desktop control tests** — deterministic desktop protocol tests plus native fixture compilation
+- **Install & lifecycle tests** — installers, autostart, singleton ownership, rollback and uninstall behavior
 
-It prefers a **named** Cloudflare tunnel when `~/.cloudflared/config.yml` declares
-one, giving a stable URL — otherwise a quick tunnel, whose hostname changes every
-start and forces the ChatGPT connector to be recreated each time. The menu shows
-which mode is active.
-
-Why it is worth using over the raw commands:
-
-- It is the supervisor. Start spawns `mcp-http.mjs` and `cloudflared`; Stop and
-  Quit stop exactly what it started, rather than discovering processes by name.
-- Start writes the unlock file and Stop removes it, so stopping is fail-closed
-  through `bridge.mjs`'s per-call latch, not merely a process kill.
-- The token lives in a mode-0600 file and is passed by `MAC_DEV_BRIDGE_HTTP_TOKEN_FILE`,
-  keeping it out of `ps eww`.
-- Status is polled from `/healthz` and from the child processes' liveness, so a
-  child dying is reported rather than assumed away.
-- On launch it reclaims orphans — **both** children. `applicationWillTerminate` does
-  not run on a force-quit, crash, or hard reboot, so a previous run could leave the
-  unlock file armed, the front end serving, and `cloudflared` still publishing a
-  public hostname. Launching disarms the latch and stops whatever is recorded in
-  `mcp-http.pid` and `cloudflared.pid`, each identity-checked first because pids get
-  recycled and those files survive `SIGKILL` and reboot. Reclaiming only the front end
-  previously left a public ingress that no later run could close, and that the next
-  Start would re-arm alongside a second tunnel.
-- It never passes `MAC_DEV_BRIDGE_FULL_ACCESS_ACK` to its children. That variable is a
-  standing unlock in `bridge.mjs`, so inheriting it would make Stop unable to revoke
-  anything — and the install docs tell you to export it.
-- One child dying stops the other. Reporting a failure while leaving the sibling alive
-  left `cloudflared` publishing with the latch still armed and the menu reading
-  "not running".
-- Children inherit the **login shell** `PATH`, so `shell_exec` behaves the same as
-  it does in a terminal (a GUI-launched app otherwise has no nvm or Homebrew).
-
-The build prefers a real local Apple code-signing identity and signs the menu app,
-`MacUIHelper`, and `MacUICursorOverlay` with stable designated requirements; CI or
-machines without a certificate fall back to ad-hoc signing with an explicit TCC
-warning. The app is not notarized. It locates `mcp-http.mjs` via
-`MAC_DEV_BRIDGE_HOME`, then a package next to the bundle, then a path baked into
-`Info.plist` at build time. Rebuild after moving the package so that path stays
-correct.
-
-It does not replace `scripts/disable.sh`: detached `shell_start` jobs outlive the
-front end by design, and only that script reclaims them from the job registry.
-
-## Prerequisites
-
-Both transports:
-
-1. macOS and a logged-in desktop user.
-2. Node.js 18 or newer.
-3. ChatGPT Developer mode.
-4. A working `codex` CLI only for the three Codex-history tools. Shell and filesystem access do not depend on Codex.
-
-OpenAI Secure MCP Tunnel additionally requires:
-
-5. The official `tunnel-client` binary, downloaded from OpenAI Platform Tunnels or the official OpenAI GitHub release, executable and available on `PATH` or at `~/.local/bin/tunnel-client`.
-6. An OpenAI tunnel ID scoped to the ChatGPT workspace that will use it.
-7. A runtime API key whose principal has Tunnels Read + Use.
-8. The **Tunnel** connection option in the ChatGPT plugin dialog.
-
-Cloudflare Tunnel + Server URL additionally requires:
-
-5. `cloudflared`, authenticated to a Cloudflare account.
-6. A hostname you control, or a quick-tunnel URL.
-7. `openssl` for generating the bearer token.
-8. The **Server URL** connection option with **OAuth** — see **Connecting to ChatGPT**. There is no No-Auth mode: `/mcp` is hardcoded with no override, and `mcp-http.mjs` refuses to start without a token.
-
-Developer-mode availability is controlled by the account rollout and workspace policy. If the Developer mode toggle is absent, this package cannot override that product-side limitation. The Tunnel option specifically is unavailable on personal accounts — it renders but is disabled — which is why the HTTP transport exists.
-
-## Install
-
-Clone the repository (or download a release/archive) and open Terminal in its folder:
+The real mutable AppKit E2E needs a logged-in Mac with TCC permissions and therefore is not treated as reliable on disposable GitHub-hosted GUI sessions. Maintainers can run it locally with:
 
 ```bash
-git clone git@github.com:dcierra/mac-developer-bridge-private.git
-cd mac-developer-bridge
+DARWINRELAY_RUN_NATIVE_DESKTOP_E2E=1 node tests/desktop-control-native.mjs
 ```
 
-Then install:
+See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
-```bash
-chmod +x install.sh uninstall.sh bridge.mjs scripts/*.sh
+## Security
 
-export MAC_DEV_BRIDGE_FULL_ACCESS_ACK='I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS'
-export CONTROL_PLANE_TUNNEL_ID='tunnel_0123456789abcdef0123456789abcdef'
+The important boundary is simple: **DarwinRelay has the authority of the macOS account that runs it.** Security features such as the unlock file, Strict approvals, audit metadata, OAuth, background browser routing and process reclamation reduce accidental or remote misuse; they do not turn arbitrary shell access into a sandbox.
 
-# Hidden input; the key is not placed in shell history.
-read -r -s -p 'Tunnel runtime API key: ' CONTROL_PLANE_API_KEY; printf '\n'
-export CONTROL_PLANE_API_KEY
+Security reports should use GitHub's private vulnerability reporting rather than a public issue. See [SECURITY.md](SECURITY.md).
 
-./install.sh
+## Project lineage
 
-unset CONTROL_PLANE_API_KEY MAC_DEV_BRIDGE_FULL_ACCESS_ACK
-```
+DarwinRelay is independently maintained and substantially diverged from **Mac Developer Bridge** by Alexander Rådahl Benz. The inherited upstream history is intentionally preserved, and the original MIT copyright notice remains in [LICENSE](LICENSE). See [UPSTREAM.md](UPSTREAM.md) for the exact lineage and attribution policy.
 
-The installer can also prompt for the tunnel ID and runtime key when run interactively. The runtime key is stored in the macOS login Keychain and is not written into the package, tunnel profile, or LaunchAgent plist.
+DarwinRelay is not affiliated with or endorsed by OpenAI, Apple, Google, Cloudflare, or the upstream maintainer.
 
-The installer:
+## License
 
-1. Requires the exact full-access acknowledgement.
-2. Validates macOS, Node, tunnel-client, Codex discovery, tunnel ID format, audit mode, and shell.
-3. Copies the bridge to `~/.local/share/mac-developer-bridge`.
-4. Creates `~/Library/Application Support/MacDeveloperBridge/FULL_ACCESS_ENABLED` with mode 0600.
-5. Runs syntax, MCP protocol, filesystem, patch, process, secret-scrubbing, and Codex-adapter tests.
-6. Stores the runtime key in Keychain.
-7. Creates a unique `tunnel-client` stdio profile and runs `tunnel-client doctor`.
-8. Installs and starts a persistent per-user LaunchAgent.
-
-Custom locations are supported with the `MAC_DEV_BRIDGE_INSTALL_DIR`, `MAC_DEV_BRIDGE_BIN_DIR`, `MAC_DEV_BRIDGE_PLIST_DIR`, `MAC_DEV_BRIDGE_DATA_DIR`, and `MAC_DEV_BRIDGE_LOG_DIR` environment variables.
-
-## Connect ChatGPT
-
-1. Enable Developer mode in ChatGPT.
-2. Open ChatGPT Plugins and create a developer-mode app.
-3. Set the connection, per transport:
-   - **Tunnel transport:** choose **Tunnel**, then select or paste the same tunnel ID used during installation. Unavailable on personal accounts — the option renders but is disabled.
-   - **HTTP transport:** choose **Server URL** and enter `https://<hostname>/mcp`. Authentication offers only OAuth, No Auth, or Mixed — see **Connecting to ChatGPT**; the bearer token has no field in this dialog.
-4. Review and enable the tools, and tick the risk acknowledgement.
-5. Start a new Chat conversation, select the app, and call `bridge_status`.
-
-Suggested first prompt:
-
-```text
-Use only the Mac Developer Bridge app for local-machine operations.
-
-First call bridge_status and report the effective user, home directory, shell, Codex binary, audit mode, and whether the tunnel runtime key was scrubbed from child command environments.
-
-Then call codex_thread_read with:
-{"thread_id":"019fa926-dbbd-7d72-aa0c-8edd41bd585c","include_turns":true}
-
-If the result is too large, call codex_thread_turns_list in ascending order with items_view="full" and continue through nextCursor until the complete persisted history is recovered.
-
-Do not invoke codex, codex exec, codex-reply, turn/start, or any OpenAI API from shell commands. The Chat conversation is the reasoning agent. Inspect the repository and branch referenced by the thread, report the current state, and continue the unfinished work.
-
-Ask before production deployments, destructive database operations, credential changes, force pushes, or deleting user data.
-```
-
-`codex_thread_read` and `codex_thread_turns_list` use local `codex app-server` read APIs. The bridge does not expose any Codex method that starts a model turn.
-
-## Full Disk Access
-
-Check the current state before guessing:
-
-```bash
-scripts/tcc-doctor.sh          # add --open to jump to the settings pane
-```
-
-It probes a TCC-protected path as `node` and as `$MAC_DEV_BRIDGE_SHELL` — those two only — and reports which hold
-the grant. Full Disk Access cannot be granted from a script — the TCC databases
-are SIP-protected, so they are unwritable even as root, and `tccutil` can only
-reset entries. A human must add the binary in System Settings, or an MDM must
-push a PPPC profile.
-
-If reads fail with `EPERM` or “Operation not permitted,” grant Full Disk Access to the actual executables in the runtime chain:
-
-- the exact `node` binary shown by `bridge_status`
-- `/bin/zsh`
-- the installed `tunnel-client` binary, for the Tunnel transport only
-
-`cloudflared` does **not** need it: it only forwards HTTP to loopback and never
-touches the filesystem on a tool's behalf.
-
-A LaunchAgent may not inherit privacy permissions previously granted to Terminal or to a different Node installation. Full Disk Access is separate from ordinary POSIX permissions.
-
-## Operations
-
-The `~/.local/share/mac-developer-bridge` paths below exist only if `install.sh`
-ran, which requires `tunnel-client` — so on the **HTTP transport that directory
-does not exist** and you run the scripts from the extracted package directory
-instead.
-
-Both transports:
-
-```bash
-# Full diagnostic report (includes the Full Disk Access check)
-./scripts/doctor.sh                 # or ~/.local/share/mac-developer-bridge/scripts/doctor.sh
-
-# Kill switch. Read its output; a non-zero exit means NOT contained.
-./scripts/disable.sh
-
-# Audit log
-tail -f "$HOME/Library/Logs/MacDeveloperBridge/audit.jsonl"
-```
-
-HTTP transport:
-
-```bash
-# Logs (only populated if you redirected them, as DEPLOY.md step 2 does)
-tail -f "$HOME/Library/Logs/MacDeveloperBridge/http.stderr.log"
-
-# Preferred persistent path: the menu app supervises HTTP + cloudflared.
-./scripts/install-http-autostart.sh
-open -n /Applications/MacDevBridge.app --args --start
-
-# A zero-downtime product update leaves the current transport PIDs untouched:
-./scripts/deploy-menubar-update.sh
-# Immediate on-disk rollback, also without restarting the current transport:
-./scripts/rollback-menubar-update.sh
-```
-
-Tunnel transport:
-
-```bash
-launchctl print "gui/$(id -u)/com.openai.mac-developer-bridge-tunnel"
-launchctl kickstart -k "gui/$(id -u)/com.openai.mac-developer-bridge-tunnel"
-
-# Re-enable after an explicit acknowledgement (requires the LaunchAgent plist)
-export MAC_DEV_BRIDGE_FULL_ACCESS_ACK='I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS'
-~/.local/share/mac-developer-bridge/scripts/enable.sh
-unset MAC_DEV_BRIDGE_FULL_ACCESS_ACK
-
-# Rotate the tunnel runtime key with hidden input
-~/.local/share/mac-developer-bridge/scripts/rotate-tunnel-key.sh
-
-tail -f "$HOME/Library/Logs/MacDeveloperBridge/tunnel.stderr.log"
-```
-
-`enable.sh` remains the Secure MCP Tunnel helper. On the HTTP transport use the
-menu app (`--start`) and optionally `install-http-autostart.sh`; Start recreates the
-unlock latch before publishing the endpoint.
-
-`tunnel-client` normally exposes loopback health endpoints and an operator UI at `http://127.0.0.1:8080/healthz`, `/readyz`, `/metrics`, and `/ui` while running.
-
-## Auditing
-
-The default mode is `metadata`. It records:
-
-- timestamp and tool name
-- a redacted preview of arguments
-- SHA-256 hash of the complete arguments
-- a compact result summary or error
-
-On the HTTP transport there is no installation, and a GUI-launched menu bar app has
-no shell environment to inherit — so the only ways to change audit mode there are to
-export it in a shell and start `mcp-http.mjs` from that shell, or to launch the app
-with `open -a MacDevBridge --env MAC_DEV_BRIDGE_AUDIT_MODE=full`. Otherwise it stays
-at `metadata`.
-
-Set `MAC_DEV_BRIDGE_AUDIT_MODE` before installation to one of:
-
-```text
-MAC_DEV_BRIDGE_AUDIT_MODE=off
-MAC_DEV_BRIDGE_AUDIT_MODE=metadata
-MAC_DEV_BRIDGE_AUDIT_MODE=full
-```
-
-`full` can persist sensitive command arguments and file content even after common token-pattern redaction. Treat the audit log as sensitive. The tunnel runtime key is removed from the bridge process environment before any shell or filesystem tool can run, although unrestricted shell access can still reach other credentials available to the macOS account.
-
-## Verify usage routing
-
-The bridge itself contains no OpenAI inference client and the Codex adapters call read-only app-server methods. Even so, verify the account-specific behavior after connection:
-
-1. Record the current Codex/Work credit balance.
-2. In Chat, call only `bridge_status` and `fs_stat` on a harmless path.
-3. Refresh the Codex/Work usage page.
-4. Confirm no Codex model usage was recorded.
-5. Then read the stored Codex thread and continue the work here.
-
-Do not use `shell_exec` to run Codex itself if the purpose is to avoid Codex model usage.
-
-## Uninstall
-
-From the extracted package or installed directory:
-
-```bash
-./uninstall.sh
-```
-
-The uninstaller removes the LaunchAgent, bridge installation, command symlink, unlock file, and Keychain runtime key.
-
-It does **not** remove the data directory, so these survive an uninstall — including two live credentials:
-
-- `http-token` — the bearer token (mode 0600)
-- `oauth-state.json` — the OAuth client id plus access/refresh token digests (mode 0600)
-- `oauth-client-id`, `mcp-http.pid`, `cloudflared.pid`, `jobs/`, and the audit log
-
-Delete `~/Library/Application Support/MacDeveloperBridge` as well if you want the credentials gone. It also does not stop a running front end; run `scripts/disable.sh` first.
+MIT. See [LICENSE](LICENSE) and [UPSTREAM.md](UPSTREAM.md).

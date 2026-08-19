@@ -15,7 +15,7 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const bridgePath = path.resolve(here, "..", "bridge.mjs");
 const temporaryRoot = await fsp.realpath(
-  await fsp.mkdtemp(path.join(os.tmpdir(), "mac-developer-bridge-adversarial-"))
+  await fsp.mkdtemp(path.join(os.tmpdir(), "darwinrelay-adversarial-"))
 );
 const dataDir = path.join(temporaryRoot, "data");
 const logDir = path.join(temporaryRoot, "logs");
@@ -36,13 +36,13 @@ const meta = {
 
 function startBridge() {
   const env = { ...process.env };
-  delete env.MAC_DEV_BRIDGE_FULL_ACCESS_ACK;
+  delete env.DARWINRELAY_FULL_ACCESS_ACK;
   Object.assign(env, {
-    MAC_DEV_BRIDGE_DATA_DIR: dataDir,
-    MAC_DEV_BRIDGE_LOG_DIR: logDir,
-    MAC_DEV_BRIDGE_UNLOCK_FILE: unlockFile,
-    MAC_DEV_BRIDGE_AUDIT_MODE: "metadata",
-    MAC_DEV_BRIDGE_UNLOCK_RECHECK_MS: "60000",
+    DARWINRELAY_DATA_DIR: dataDir,
+    DARWINRELAY_LOG_DIR: logDir,
+    DARWINRELAY_UNLOCK_FILE: unlockFile,
+    DARWINRELAY_AUDIT_MODE: "metadata",
+    DARWINRELAY_UNLOCK_RECHECK_MS: "60000",
     CONTROL_PLANE_API_KEY: "SYNTHETIC_CONTROL_PLANE_KEY_FOR_TESTS_ONLY"
   });
 
@@ -177,7 +177,7 @@ try {
   );
   assert.equal(
     expected.format,
-    "mac-developer-bridge-poisoned-repository/v1"
+    "darwinrelay-poisoned-repository/v1"
   );
   assert.equal(expected.expected_bridge_behavior.length, 3);
   assert.equal(expected.expected_model_behavior.length, 2);

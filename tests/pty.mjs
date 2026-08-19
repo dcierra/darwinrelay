@@ -31,7 +31,7 @@ const bridgePath = path.resolve(here, "..", "bridge.mjs");
 // macOS: /var is a symlink to /private/var, and a path the bridge echoes back is
 // already resolved. Comparing an unresolved temp path against it compares two
 // different strings for the same directory — a real bug came from exactly that.
-const temporaryRoot = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "mac-developer-bridge-pty-")));
+const temporaryRoot = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "darwinrelay-pty-")));
 const FULL_ACCESS_ACK = "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS";
 const CASE_TIMEOUT_MS = 120_000;
 const CTRL_C = String.fromCharCode(3);
@@ -126,22 +126,22 @@ async function startBridge(context, { env = {} } = {}) {
   const workDir = path.join(dataDir, "work");
   await fsp.mkdir(workDir, { recursive: true });
   const unlockFile = path.join(dataDir, "FULL_ACCESS_ENABLED");
-  // A file latch, never MAC_DEV_BRIDGE_FULL_ACCESS_ACK: the env acknowledgement is
+  // A file latch, never DARWINRELAY_FULL_ACCESS_ACK: the env acknowledgement is
   // deliberately not a kill-switch surface, so a suite that used it could not test
   // revocation at all.
   await fsp.writeFile(unlockFile, `${FULL_ACCESS_ACK}\n`);
 
   const child = spawn(process.execPath, [bridgePath], {
-    // A minimal environment on purpose: MAC_DEV_BRIDGE_FULL_ACCESS_ACK must not
+    // A minimal environment on purpose: DARWINRELAY_FULL_ACCESS_ACK must not
     // leak in from the developer's shell, or the revocation cases would be
     // testing a latch that is deliberately bypassed.
     env: {
       PATH: process.env.PATH,
       HOME: process.env.HOME,
-      MAC_DEV_BRIDGE_DATA_DIR: dataDir,
-      MAC_DEV_BRIDGE_LOG_DIR: logDir,
-      MAC_DEV_BRIDGE_UNLOCK_FILE: unlockFile,
-      MAC_DEV_BRIDGE_AUDIT_MODE: "metadata",
+      DARWINRELAY_DATA_DIR: dataDir,
+      DARWINRELAY_LOG_DIR: logDir,
+      DARWINRELAY_UNLOCK_FILE: unlockFile,
+      DARWINRELAY_AUDIT_MODE: "metadata",
       ...env,
     },
     stdio: ["pipe", "pipe", "pipe"],
@@ -306,7 +306,7 @@ async function runCase(name, fn) {
 
 await runCase("pty tools are absent, not broken, when the helper cannot run", async (context) => {
   const bridge = await startBridge(context, {
-    env: { MAC_DEV_BRIDGE_PTY_HELPER: path.join(temporaryRoot, "no-such-helper.pl") },
+    env: { DARWINRELAY_PTY_HELPER: path.join(temporaryRoot, "no-such-helper.pl") },
   });
   const listed = await bridge.request("tools/list");
   const names = listed.result.tools.map((tool) => tool.name);
@@ -396,7 +396,7 @@ await runCase("bad pty_start, pty_resize and pty_signal arguments fail closed", 
 });
 
 await runCase("a closed session cannot be written to, still reads back, and is eventually evicted", async (context) => {
-  const bridge = await startBridge(context, { env: { MAC_DEV_BRIDGE_PTY_MAX_SESSIONS: "2" } });
+  const bridge = await startBridge(context, { env: { DARWINRELAY_PTY_MAX_SESSIONS: "2" } });
   const session = await startSession(context, bridge, {
     command: "/bin/sh",
     args: ["-c", "echo before-close; sleep 30"],
@@ -550,7 +550,7 @@ await runCase("output keeps its order and loses nothing across repeated reads", 
 await runCase("multibyte output survives read boundaries and a wrapped ring", async (context) => {
   // 4096 is the floor the ring accepts, so the 300 lines below overrun it many
   // times over and every read starts mid-buffer.
-  const bridge = await startBridge(context, { env: { MAC_DEV_BRIDGE_PTY_RING_BYTES: "4096" } });
+  const bridge = await startBridge(context, { env: { DARWINRELAY_PTY_RING_BYTES: "4096" } });
   const session = await startSession(context, bridge, {
     command: "/bin/sh",
     args: ["-c", 'i=1; while [ $i -le 300 ]; do echo "$i:日本語テキスト-ünïcödé-🎉"; i=$((i+1)); done; echo UTF8-END'],
@@ -653,7 +653,7 @@ await runCase("stripping ANSI is stable across read boundaries", async (context)
 // Bounds.
 
 await runCase("the session cap is enforced and released by pty_close", async (context) => {
-  const bridge = await startBridge(context, { env: { MAC_DEV_BRIDGE_PTY_MAX_SESSIONS: "2" } });
+  const bridge = await startBridge(context, { env: { DARWINRELAY_PTY_MAX_SESSIONS: "2" } });
   const status = await bridge.ok("bridge_status");
   assert.equal(status.ptyLimits.maxSessions, 2);
   assert.equal(status.ptyLimits.ringBytesGlobal, 2 * status.ptyLimits.ringBytesPerSession, "the global retention bound is the per-session ring times the session cap");
@@ -684,7 +684,7 @@ await runCase("the session cap holds against concurrent pty_start", async (conte
   // scripts/disable.sh — and mcp-http.mjs caps neither connections nor
   // concurrent requests.
   const cap = 3;
-  const bridge = await startBridge(context, { env: { MAC_DEV_BRIDGE_PTY_MAX_SESSIONS: String(cap) } });
+  const bridge = await startBridge(context, { env: { DARWINRELAY_PTY_MAX_SESSIONS: String(cap) } });
   const attempts = 24;
   const settled = await Promise.all(
     Array.from({ length: attempts }, () => bridge.call("pty_start", { command: "/bin/cat", cwd: bridge.workDir })),
@@ -730,7 +730,7 @@ await runCase("the session cap holds against concurrent pty_start", async (conte
 });
 
 await runCase("the per-session output cap drops the oldest bytes and says so", async (context) => {
-  const bridge = await startBridge(context, { env: { MAC_DEV_BRIDGE_PTY_RING_BYTES: "4096" } });
+  const bridge = await startBridge(context, { env: { DARWINRELAY_PTY_RING_BYTES: "4096" } });
   const session = await startSession(context, bridge, {
     command: "/bin/sh",
     args: ["-c", 'i=0; while [ $i -lt 800 ]; do echo "line-$i-paddingpaddingpadding"; i=$((i+1)); done; echo RING-END'],
@@ -760,7 +760,7 @@ await runCase("an idle session is reclaimed even while it is producing output", 
   // "Output from the child does not count as activity" is the documented rule, and
   // it is the one that matters: a forgotten `tail -f` would otherwise hold an
   // unrestricted shell open forever.
-  const bridge = await startBridge(context, { env: { MAC_DEV_BRIDGE_PTY_IDLE_TIMEOUT_MS: "1500" } });
+  const bridge = await startBridge(context, { env: { DARWINRELAY_PTY_IDLE_TIMEOUT_MS: "1500" } });
   const status = await bridge.ok("bridge_status");
   assert.equal(status.ptyLimits.idleTimeoutMs, 1_500);
 
@@ -805,7 +805,7 @@ await runCase("an idle session is reclaimed even while it is producing output", 
 
 await runCase("the lifetime ceiling reclaims a session that is being actively used", async (context) => {
   const bridge = await startBridge(context, {
-    env: { MAC_DEV_BRIDGE_PTY_MAX_LIFETIME_MS: "5000", MAC_DEV_BRIDGE_PTY_IDLE_TIMEOUT_MS: "600000" },
+    env: { DARWINRELAY_PTY_MAX_LIFETIME_MS: "5000", DARWINRELAY_PTY_IDLE_TIMEOUT_MS: "600000" },
   });
   const session = await startSession(context, bridge, {
     command: "/bin/sh",
@@ -1124,7 +1124,7 @@ async function assertSessionContained(bridge, live, label) {
 await runCase("removing the unlock file during a tool call terminates the session and exits 78", async (context) => {
   // A high recheck interval isolates the per-call latch: whatever kills this
   // session, it is not the background sweep.
-  const bridge = await startBridge(context, { env: { MAC_DEV_BRIDGE_UNLOCK_RECHECK_MS: "60000" } });
+  const bridge = await startBridge(context, { env: { DARWINRELAY_UNLOCK_RECHECK_MS: "60000" } });
   const live = await heartbeatSession(context, bridge);
 
   await fsp.rm(bridge.unlockFile, { force: true });
@@ -1147,7 +1147,7 @@ await runCase("removing the unlock file with no further tool calls still termina
   // "removing the unlock file kills pty sessions" is false for exactly as long as
   // the client stops talking — and an idle interactive shell is the likeliest
   // thing to be left behind.
-  const bridge = await startBridge(context, { env: { MAC_DEV_BRIDGE_UNLOCK_RECHECK_MS: "400" } });
+  const bridge = await startBridge(context, { env: { DARWINRELAY_UNLOCK_RECHECK_MS: "400" } });
   const live = await heartbeatSession(context, bridge);
 
   await fsp.rm(bridge.unlockFile, { force: true });
@@ -1241,7 +1241,7 @@ await runCase("a killed helper is noticed and its shell is reclaimed, not orphan
 });
 
 await runCase("a session is recorded for the reclaimer and its keystrokes are never audited", async (context) => {
-  const bridge = await startBridge(context, { env: { MAC_DEV_BRIDGE_AUDIT_MODE: "full" } });
+  const bridge = await startBridge(context, { env: { DARWINRELAY_AUDIT_MODE: "full" } });
   const session = await startSession(context, bridge, {
     command: "/bin/cat",
     cwd: bridge.workDir,

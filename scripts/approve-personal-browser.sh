@@ -23,9 +23,9 @@ set -euo pipefail
 # audit record naming the nonce; it does not contain a model that has already
 # decided to escalate.
 
-DATA_DIR="${MAC_DEV_BRIDGE_DATA_DIR:-$HOME/Library/Application Support/MacDeveloperBridge}"
-APPROVAL_FILE="${MAC_DEV_BRIDGE_PERSONAL_APPROVAL_FILE:-$DATA_DIR/PERSONAL_BROWSER_APPROVED}"
-BACKGROUND_GRANT_DIR="${MAC_DEV_BRIDGE_BACKGROUND_CHROME_GRANT_DIR:-$DATA_DIR/chrome-background-grants}"
+DATA_DIR="${DARWINRELAY_DATA_DIR:-$HOME/Library/Application Support/DarwinRelay}"
+APPROVAL_FILE="${DARWINRELAY_PERSONAL_APPROVAL_FILE:-$DATA_DIR/PERSONAL_BROWSER_APPROVED}"
+BACKGROUND_GRANT_DIR="${DARWINRELAY_BACKGROUND_CHROME_GRANT_DIR:-$DATA_DIR/chrome-background-grants}"
 # 15 minutes is the ceiling bridge.mjs enforces at read time; anything longer is
 # refused there, so there is no point offering it here.
 MAX_TTL_SECONDS=900

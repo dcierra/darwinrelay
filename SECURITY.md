@@ -2,7 +2,7 @@
 
 ### Self-hosted GitHub Actions runner
 
-The private repository CI runs on a repo-scoped self-hosted macOS runner labelled `mdb-ci` / `mdb-native-e2e`. Treat `.github/workflows/**` as executable code with the permissions of the logged-in macOS user. The CI workflow explicitly refuses pull requests whose head repository differs from this repository, so fork-controlled code is never dispatched to the operator Mac. Do not relax that guard without moving CI back to an isolated hosted runner.
+Public CI runs on isolated GitHub-hosted macOS runners. The repository does not dispatch pull-request code to a maintainer workstation. Real mutable AppKit E2E is a local maintainer check because TCC-dependent GUI input is not a trustworthy assertion on disposable hosted sessions.
 
 ## Reporting a vulnerability
 
@@ -28,13 +28,13 @@ headers. A connection could finish its headers then dribble a body staying just
 under the cap forever, pinning ~8 MiB and never completing — 250 of them reached
 1.75 GB, which OOM-kills the process fronting your shell, unauthenticated. Two limits now apply on every route, and both count the right thing:
 
-- **A global byte budget** (`MAC_DEV_BRIDGE_MAX_BUFFERED_BYTES`, default 96 MiB).
+- **A global byte budget** (`DARWINRELAY_MAX_BUFFERED_BYTES`, default 96 MiB).
   An earlier attempt capped concurrent *connections* instead, which was a far cheaper
   denial of service — 48 sockets sending one byte each held every slot for the full
   timeout, denying all POST routes for ~10 KB of traffic, and braking `POST /authorize`,
   the only path that can approve a connector. Counting bytes means ordinary small
   bodies cost almost nothing and can never exclude anyone.
-- **An idle deadline** (`MAC_DEV_BRIDGE_BODY_IDLE_TIMEOUT_MS`, default 30 s), reset on
+- **An idle deadline** (`DARWINRELAY_BODY_IDLE_TIMEOUT_MS`, default 30 s), reset on
   every chunk. It bounds *stalls*, which is what the attack exploits, rather than
   transfer time — a total deadline would truncate a legitimate large `fs_write`, whose
   base64 `content` is bounded only by `MAX_BODY`.
@@ -68,14 +68,14 @@ authorization server. Properties that matter:
 
 ## Bearer token boundary (HTTP transport only)
 
-For the HTTP transport, `MAC_DEV_BRIDGE_HTTP_TOKEN` is the entire authorization boundary for any client that can send an `Authorization: Bearer` header.
+For the HTTP transport, `DARWINRELAY_HTTP_TOKEN` is the entire authorization boundary for any client that can send an `Authorization: Bearer` header.
 
 Note ChatGPT currently cannot: its plugin dialog offers only OAuth, No Auth, or Mixed. So this token protects the endpoint against arbitrary internet traffic, but it is not yet the mechanism by which ChatGPT authenticates. Properties to be aware of:
 
 - It is read once at startup and cannot be rotated without restarting the process.
 - `mcp-http.mjs` refuses to start without it, below 24 bytes, or with non-ASCII bytes. Generate it with `openssl rand -hex 32`; a human-chosen passphrase is not appropriate for a credential that is the sole barrier.
 - It is deleted from the bridge child's environment, so `shell_exec` and background jobs do not inherit it. This mirrors the `CONTROL_PLANE_API_KEY` handling below.
-- That scrubbing covers descendants' environments only. If the token is passed as `MAC_DEV_BRIDGE_HTTP_TOKEN`, it stays visible in `ps eww` output for the process lifetime, because that reads the kernel's exec-time snapshot and is unaffected by deleting the key at runtime. The same limitation applies to `CONTROL_PLANE_API_KEY`. Pass `MAC_DEV_BRIDGE_HTTP_TOKEN_FILE` pointing at a mode-0600 file to keep the plaintext out of the environment entirely.
+- That scrubbing covers descendants' environments only. If the token is passed as `DARWINRELAY_HTTP_TOKEN`, it stays visible in `ps eww` output for the process lifetime, because that reads the kernel's exec-time snapshot and is unaffected by deleting the key at runtime. The same limitation applies to `CONTROL_PLANE_API_KEY`. Pass `DARWINRELAY_HTTP_TOKEN_FILE` pointing at a mode-0600 file to keep the plaintext out of the environment entirely.
 - Comparison is constant-time over SHA-256 digests, so the endpoint does not leak the token by timing.
 - `GET /healthz` is unauthenticated and returns only `{"ok":true}`. It confirms the endpoint exists to anyone who finds the hostname.
 
@@ -86,11 +86,11 @@ Because the hostname is guessable-once-known and the token never rotates, put Cl
 The bridge refuses to start unless either:
 
 - the configured `FULL_ACCESS_ENABLED` file contains exactly `I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS`, or
-- the process has `MAC_DEV_BRIDGE_FULL_ACCESS_ACK=I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS`.
+- the process has `DARWINRELAY_FULL_ACCESS_ACK=I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS`.
 
 `install.sh` requires that acknowledgement and creates a mode-0600 unlock file. `bridge.mjs` re-reads it before every tool call, so `scripts/disable.sh` removing it stops a running bridge at its next call, not just future starts.
 
-This is a revocation latch, not a sandbox or authorization boundary: it gates whether tools may be invoked, and does nothing about what an already-executing command or a detached background job is doing. Note the environment form (`MAC_DEV_BRIDGE_FULL_ACCESS_ACK`) is deliberately *not* revocable this way — it lives in the process's own environment, so a bridge started with it set is not stoppable by deleting a file. Prefer the unlock file for anything you may need to revoke.
+This is a revocation latch, not a sandbox or authorization boundary: it gates whether tools may be invoked, and does nothing about what an already-executing command or a detached background job is doing. Note the environment form (`DARWINRELAY_FULL_ACCESS_ACK`) is deliberately *not* revocable this way — it lives in the process's own environment, so a bridge started with it set is not stoppable by deleting a file. Prefer the unlock file for anything you may need to revoke.
 
 ## Poisoned repository test harness
 
@@ -113,7 +113,7 @@ for the test matrix and explicit limitations.
 An authorization endpoint that redirects to an attacker-chosen URL leaks authorization
 codes, so `redirect_uri` is validated by parsing, never by prefix or substring:
 
-- Two built-in exact-match values, plus anything in `MAC_DEV_BRIDGE_OAUTH_REDIRECT_URIS`, match exactly. The built-in is `https://chatgpt.com/connector_platform_oauth_redirect`.
+- Two built-in exact-match values, plus anything in `DARWINRELAY_OAUTH_REDIRECT_URIS`, match exactly. The built-in is `https://chatgpt.com/connector_platform_oauth_redirect`.
 - ChatGPT's callbacks match by shape, because it allocates a new path per connector.
   The supplied string must already equal `https://chatgpt.com` plus a path of
   `/connector/oauth/<token>` where the token is `[A-Za-z0-9_-]{1,128}`. Comparing
@@ -143,9 +143,9 @@ This is credential hygiene, not isolation. An unrestricted shell can still attem
 
 What is enforced:
 
-- **Revocation reaches live sessions.** Removing the unlock file terminates them by the same four paths federated children use: the per-call check, an idle re-check interval that is **always armed**, not gated on a live-session count (`MAC_DEV_BRIDGE_UNLOCK_RECHECK_MS`, default 3 s — so a silent client does not extend a session past the latch), `SIGTERM`/`SIGINT`/transport-close teardown, and `disable.sh` from `$DATA_DIR/jobs/*.json`.
+- **Revocation reaches live sessions.** Removing the unlock file terminates them by the same four paths federated children use: the per-call check, an idle re-check interval that is **always armed**, not gated on a live-session count (`DARWINRELAY_UNLOCK_RECHECK_MS`, default 3 s — so a silent client does not extend a session past the latch), `SIGTERM`/`SIGINT`/transport-close teardown, and `disable.sh` from `$DATA_DIR/jobs/*.json`.
 - **Helper death is detected.** The session program does not inherit the helper's control descriptor, so when the helper dies the bridge sees it, reclaims the leader's process group, and stops reporting the session as live. Without that, a shell running `trap '' HUP TERM INT` survived, was reparented to pid 1, and was reported `exited:false` for up to the idle timeout.
-- **The session cap is taken, not merely checked.** `MAC_DEV_BRIDGE_PTY_MAX_SESSIONS` is reserved synchronously, before any `await`, so concurrent `pty_start` calls cannot all pass one stale check. `kern.tty.ptmx_max` is 511 **system-wide**: exhausting it takes Terminal.app, iTerm and `ssh` away from the operator, which is the operator's own route to `disable.sh`.
+- **The session cap is taken, not merely checked.** `DARWINRELAY_PTY_MAX_SESSIONS` is reserved synchronously, before any `await`, so concurrent `pty_start` calls cannot all pass one stale check. `kern.tty.ptmx_max` is 511 **system-wide**: exhausting it takes Terminal.app, iTerm and `ssh` away from the operator, which is the operator's own route to `disable.sh`.
 - **Bounded retention and lifetime.** Output is a fixed per-session ring (never a growing chunk list — `yes` in a session out-produces any reader), the table is capped including exited sessions, and both an idle timeout and a hard lifetime ceiling reclaim a forgotten session.
 - **Keystrokes are never audited.** `pty_write` data is redacted on both the success and the failure path, so a passphrase typed at a no-echo prompt does not land in the log. Byte counts and cursors are recorded; the transcript is not.
 
@@ -165,11 +165,11 @@ The result fields are separate on purpose: `leaderGroupGone` is the group check 
 
 ## Child MCP servers (federation gateway)
 
-`bridge.mjs` can start other MCP servers as child processes and expose their tools under a per-provider prefix (`chrome__navigate_page`). Nothing is federated until an operator configures it: with `MAC_DEV_BRIDGE_MCP_SERVERS` (a path to JSON) and `MAC_DEV_BRIDGE_MCP_SERVERS_JSON` (inline) both unset, the gateway starts no children and advertises no extra tools.
+`bridge.mjs` can start other MCP servers as child processes and expose their tools under a per-provider prefix (`chrome__navigate_page`). Nothing is federated until an operator configures it: with `DARWINRELAY_MCP_SERVERS` (a path to JSON) and `DARWINRELAY_MCP_SERVERS_JSON` (inline) both unset, the gateway starts no children and advertises no extra tools.
 
 `command` and `args` are always operator-supplied and must be absolute paths to a **pinned** version. Do not point them at `npx -y ...@latest`: that downloads and executes the newest npm publish onto a publicly reachable host, and it also makes the gateway's public tool surface change with no edit here — the exposed set varies with `--slim`, `--no-category-*` and `--categoryExtensions`.
 
-Each child receives an environment built from `{}` — an **allowlist**, because a denylist leaks every secret added to the operator's shell after it was written. Forwarded: `PATH`, `HOME`, `TMPDIR`, `USER`, `LOGNAME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, plus keys named explicitly in the provider's config. Refused even if named in config: the `MAC_DEV_BRIDGE_*` family (including `MAC_DEV_BRIDGE_AUDIT_LOG` — a child that can write the audit log can forge or truncate the record of its own use), `CONTROL_PLANE_API_KEY`, common cloud and AI credentials, `npm_config_*`, and anything matching `/(_TOKEN|_SECRET|_KEY|PASSWORD)$/`. `bridge_status` reports the live allowlist and every refusal.
+Each child receives an environment built from `{}` — an **allowlist**, because a denylist leaks every secret added to the operator's shell after it was written. Forwarded: `PATH`, `HOME`, `TMPDIR`, `USER`, `LOGNAME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TERM`, plus keys named explicitly in the provider's config. Refused even if named in config: the `DARWINRELAY_*` family (including `DARWINRELAY_AUDIT_LOG` — a child that can write the audit log can forge or truncate the record of its own use), `CONTROL_PLANE_API_KEY`, common cloud and AI credentials, `npm_config_*`, and anything matching `/(_TOKEN|_SECRET|_KEY|PASSWORD)$/`. `bridge_status` reports the live allowlist and every refusal.
 
 As with the tunnel key, **this is credential hygiene, not isolation.** Node genuinely needs `PATH` and `HOME`, and with `HOME` set the child can read `~/.ssh`, `~/.aws` and `~/Library/Application Support` anyway.
 
@@ -191,7 +191,7 @@ Known gaps in this release, stated rather than implied:
 
 - **A child's result is not marked as coming from a child.** `content`, `structuredContent`, `isError` and `_meta` pass through unmodified, so a compromised provider can return text shaped exactly like one of the bridge's own error envelopes, and can set keys inside the `io.modelcontextprotocol/*` namespace of a result the bridge appears to have authored.
 - **Child-derived text is copied verbatim into operator-facing output** — unparseable stdout lines into the bridge's stderr, and `stderrTail` into `bridge_status`. It may contain ANSI escapes, carriage returns, and lines forged to look like the gateway's own log format.
-- **The provider count is uncapped.** Startup is now concurrent and each provider is bounded by `MAC_DEV_BRIDGE_MCP_START_DEADLINE_MS`, so N slow providers cost N concurrent children rather than N times the budget — but nothing limits N.
+- **The provider count is uncapped.** Startup is now concurrent and each provider is bounded by `DARWINRELAY_MCP_START_DEADLINE_MS`, so N slow providers cost N concurrent children rather than N times the budget — but nothing limits N.
 - **`killNow()` (the kill-switch path) does not remove the child's job-metadata file.** A stale entry naming a dead process group is left in `$DATA_DIR/jobs`, and `disable.sh`'s ownership check accepts a recycled pgid.
 - There are **no per-conversation capability leases, and none are achievable** without a protocol change. `mcp-http.mjs` re-keys every request onto one shared `bridge.mjs` child, so nothing on the stdio line distinguishes one OAuth session or conversation from another. What is enforceable is process-global: which providers may start at all, the env allowlist, and isolated-by-default browsing. Do not read the controls above as a per-caller authorization boundary — **every credential that reaches `/mcp` already has unrestricted shell.**
 
@@ -201,7 +201,7 @@ The optional `chrome_*` tools are designed specifically for the UX problem creat
 
 In signed-in mode, the native host is bound at install time to the selected Chrome profile's account identity. The extension reports the signed-in profile through Chrome's identity API; the host refuses a signed-out profile or an email/Gaia-id mismatch.
 
-`dedicated-local` mode is intentionally different: the installer requires an explicit `--profile NAME_OR_DIRECTORY`, records that profile's Chrome directory/display name, and the host requires the extension to report **no signed-in primary account**. Chrome's extension APIs do not expose the profile directory/name to the extension, so the remaining isolation invariant is operational: load the unpacked MDB extension only in that selected local profile. Loading the same extension into another signed-out profile would be indistinguishable to the native host. If the dedicated profile is later signed in, the host fails closed until the binding is reinstalled. Neither mode is a credential boundary against same-user code that can modify the extension, binding file, installed host, or repository.
+`dedicated-local` mode is intentionally different: the installer requires an explicit `--profile NAME_OR_DIRECTORY`, records that profile's Chrome directory/display name, and the host requires the extension to report **no signed-in primary account**. Chrome's extension APIs do not expose the profile directory/name to the extension, so the remaining isolation invariant is operational: load the unpacked DarwinRelay extension only in that selected local profile. Loading the same extension into another signed-out profile would be indistinguishable to the native host. If the dedicated profile is later signed in, the host fails closed until the binding is reinstalled. Neither mode is a credential boundary against same-user code that can modify the extension, binding file, installed host, or repository.
 
 That convenience is an authority grant, not a sandbox. An approved background click can submit a form, send a message, change a cloud setting, publish content, or delete data with whatever authority the logged-in website session has. Losing focus theft does not reduce the consequence of a bad action.
 
@@ -213,17 +213,17 @@ The built-in background surface is intentionally narrower than the federated Chr
 - password input values are returned as `<redacted>` by `chrome_snapshot`;
 - authenticated web actions are tab list/open/navigate/snapshot/click/fill/close;
 - `chrome_workspace_status` and `chrome_workspace_setup` manage only extension-owned local workspace state and do not consume a website grant;
-- routine `chrome_open` **does not create a Chrome tab**. It leases one of the pre-created extension-owned tabs from the `MDB` group;
-- `chrome_close` releases an `MDB` tab back to its idle extension page instead of destroying the pool tab.
+- routine `chrome_open` **does not create a Chrome tab**. It leases one of the pre-created extension-owned tabs from the `DarwinRelay` group;
+- `chrome_close` releases an `DarwinRelay` tab back to its idle extension page instead of destroying the pool tab.
 
-The `MDB` group is a Chrome-native tab group backed by `chrome.storage.local`. The default pool size is four (maximum eight). The group is collapsed when idle and expands while tabs are leased. State is reconciled after extension/service-worker restarts, and the extension can rediscover its own group by title/color plus the presence of an extension-owned workspace page. It deliberately does not adopt an arbitrary user group that merely happens to have the same title. Older/internal `tabs.open` requests are normalized to `workspace.open` in the JS client, native host, and extension so there is no supported loose-tab creation path.
+The `DarwinRelay` group is a Chrome-native tab group backed by `chrome.storage.local`. The default pool size is four (maximum eight). The group is collapsed when idle and expands while tabs are leased. State is reconciled after extension/service-worker restarts, and the extension can rediscover its own group by title/color plus the presence of an extension-owned workspace page. It deliberately does not adopt an arbitrary user group that merely happens to have the same title. Older/internal `tabs.open` requests are normalized to `workspace.open` in the JS client, native host, and extension so there is no supported loose-tab creation path.
 
 Pool creation remains a foreground-only boundary. On the measured Chrome/macOS combination, even `chrome.tabs.create({active:false})` can foreground Chrome. `chrome_workspace_setup` therefore refuses to create or expand the pool unless a normal Chrome window is **already focused**, and routine browser work fails closed rather than creating a loose fallback tab. If the pool disappears after a Chrome/extension restart, the extension automatically recreates the default pool the next time Chrome becomes naturally focused; it never activates Chrome on the operator's behalf. Once the pool exists, routine open/navigate/read/click/fill/release operations reuse those tabs and avoid creation-time focus theft.
 
 By default, background Chrome runs in **relaxed** approval mode: once the extension/profile binding is installed, normal HTTP/HTTPS URLs do not require per-site grant files. This matches the project's intentional unrestricted-shell trust model and removes approval ceremony from ordinary execution. The operator can enable **Strict approvals** in the menu-bar app at any time; the bridge re-reads `$DATA_DIR/settings.json` on each relevant action, so the change is live. In Strict mode, background-Chrome grants are additive mode-0600 files under `$DATA_DIR/chrome-background-grants/`, each with its own nonce, URL patterns, and expiry capped at 15 minutes. The bridge unions all unexpired patterns and Chrome remains the final URL authority.
 
 
-Approval mode and browser routing are separate controls. `shell_exec` and `shell_start` always reject direct Chrome AppleScript/JXA, direct Chrome executable launches, and shell `open` calls for HTTP/HTTPS URLs (including background `open -g`) with `CHROME_BACKGROUND_REQUIRED`, even in relaxed mode. The reason is UX, not a claim of containment: MDB already has a profile-bound background browser path, and allowing a parallel shell-driven Chrome path reintroduced the exact focus theft the extension exists to prevent. Native browser security UI that cannot work through the background surface remains a manual/user-foreground boundary rather than an automatic shell fallback.
+Approval mode and browser routing are separate controls. `shell_exec` and `shell_start` always reject direct Chrome AppleScript/JXA, direct Chrome executable launches, and shell `open` calls for HTTP/HTTPS URLs (including background `open -g`) with `CHROME_BACKGROUND_REQUIRED`, even in relaxed mode. The reason is UX, not a claim of containment: DarwinRelay already has a profile-bound background browser path, and allowing a parallel shell-driven Chrome path reintroduced the exact focus theft the extension exists to prevent. Native browser security UI that cannot work through the background surface remains a manual/user-foreground boundary rather than an automatic shell fallback.
 
 The shared-pool behavior is intentionally process-global because `mcp-http.mjs` multiplexes every conversation into one bridge child and does not carry a per-conversation identity on the stdio line. This is a UX/authorization-lifetime improvement, not a per-chat security boundary: once the operator approves a site for background Chrome, every conversation that already has unrestricted access to this bridge can use that site until the grant expires. The same-user/unrestricted-shell caveat still applies.
 
@@ -235,15 +235,15 @@ Some browser actions cannot be made reliable in the background without defeating
 
 ## Optional raw CDP backend
 
-`MAC_DEV_BRIDGE_ADVANCED_BROWSER=1` is an explicit second browser authority surface. When enabled, MDB can talk directly to an already-running Browser Harness daemon over its same-user Unix socket and issue arbitrary Chrome DevTools Protocol `Domain.method` requests. The adapter does **not** start/install Browser Harness, execute its arbitrary Python surface, or replace the managed `chrome_*` extension workspace. Socket ownership is checked against the current uid before use.
+`DARWINRELAY_ADVANCED_BROWSER=1` is an explicit second browser authority surface. When enabled, DarwinRelay can talk directly to an already-running Browser Harness daemon over its same-user Unix socket and issue arbitrary Chrome DevTools Protocol `Domain.method` requests. The adapter does **not** start/install Browser Harness, execute its arbitrary Python surface, or replace the managed `chrome_*` extension workspace. Socket ownership is checked against the current uid before use.
 
-Raw CDP is intentionally hidden when the opt-in is absent and **fails closed whenever Strict approvals is enabled**. Unlike the managed extension API, an arbitrary CDP method can enumerate targets, inspect network events, evaluate JavaScript, alter cookies/storage, upload files or navigate outside a predeclared site; there is no sound generic mapping from `Domain.method + params` to MDB's URL-pattern grant. Pretending otherwise would make Strict mode misleading. Use the narrower `chrome_*` tools when scoped URL approvals are required.
+Raw CDP is intentionally hidden when the opt-in is absent and **fails closed whenever Strict approvals is enabled**. Unlike the managed extension API, an arbitrary CDP method can enumerate targets, inspect network events, evaluate JavaScript, alter cookies/storage, upload files or navigate outside a predeclared site; there is no sound generic mapping from `Domain.method + params` to DarwinRelay's URL-pattern grant. Pretending otherwise would make Strict mode misleading. Use the narrower `chrome_*` tools when scoped URL approvals are required.
 
 The raw-CDP adapter preserves the Browser Harness one-JSON-line Unix-socket protocol and bounds response bytes/time. Treat enabling it as equivalent to granting broad control of whatever browser targets that daemon can reach.
 
 ## Native desktop-control helper
 
-The private desktop-control line adds `MacUIHelper`, a Swift executable used by the built-in `ui_*` tools. It deliberately does **not** run as a daemon: `bridge.mjs` starts one detached helper process for a tool call, bounds its output/time, tracks it in the same in-flight process set as foreground shell commands, and reclaims its process group on bridge revocation or teardown.
+The native desktop-control runtime adds `MacUIHelper`, a Swift executable used by the built-in `ui_*` tools. It deliberately does **not** run as a daemon: `bridge.mjs` starts one detached helper process for a tool call, bounds its output/time, tracks it in the same in-flight process set as foreground shell commands, and reclaims its process group on bridge revocation or teardown.
 
 The helper receives only a small environment allowlist (`PATH`, `HOME`, temporary-directory/user/locale/terminal variables). Bridge, tunnel, cloud, and other ambient credentials are not intentionally inherited by the helper.
 
@@ -262,27 +262,27 @@ macOS TCC remains outside the bridge's control. Accessibility, Screen Recording 
 
 AX values whose role/subrole indicates a secure field are redacted from `ui_tree`. This is not a complete secret boundary: screenshots, clipboard reads, application titles, non-secure text fields, and other UI-visible state can still contain sensitive data.
 
-Input text is treated specially by the local audit layer. `ui_keyboard.text`, `ui_clipboard_write.text`, `ui_action` values for `set_value`, and the equivalent nested `ui_sequence` fields are replaced with byte-count/SHA-256 correlation markers before any audit serialization, including `MAC_DEV_BRIDGE_AUDIT_MODE=full`. Raw `browser_cdp_call.params` is likewise replaced wholesale with a JSON byte-count/hash marker because CDP parameters can contain cookies, headers, form values or script source.
+Input text is treated specially by the local audit layer. `ui_keyboard.text`, `ui_clipboard_write.text`, `ui_action` values for `set_value`, and the equivalent nested `ui_sequence` fields are replaced with byte-count/SHA-256 correlation markers before any audit serialization, including `DARWINRELAY_AUDIT_MODE=full`. Raw `browser_cdp_call.params` is likewise replaced wholesale with a JSON byte-count/hash marker because CDP parameters can contain cookies, headers, form values or script source.
 
 AX references are ephemeral and include a 64-bit fingerprint: `ax:<pid>:<child.path>:<fingerprint>`. Before semantic mutation, the helper re-resolves the path and recomputes identity from role, subrole, identifier, title, description, and frame. If only the AX child indices changed, it performs a bounded search for the exact fingerprint and accepts recovery only when there is exactly one match. Changed, missing, or ambiguous identities fail with `UI_ELEMENT_STALE`. `ui_tree`/`ui_observe` additionally issue an in-memory 60-second observation id (bounded to 64 generations); mutation calls can require the ref to have existed in that observation. `ui_action.precondition` rechecks semantic properties immediately before mutation and `ui_action.verify` performs a bounded postcondition wait. These are correctness controls, not cryptographic/security boundaries against same-user code.
 
 Strict approvals covers all dedicated native mutation tools as well as detected shell/AppleScript foreground actions. `ui_sequence` resolves the union of applications referenced by every mutation step and consumes one grant for that complete burst. When Strict mode is enabled, application activation/launch, semantic actions, pointer/keyboard/drag input, window actions, dialog actions, and file-panel actions consume the existing one-use app-scoped foreground grant. Relaxed mode permits them directly. As elsewhere in this project, this is an operator-drift control rather than a sandbox against an already-authorized unrestricted shell.
 
-PID-targeted input is a UX optimization, not a stronger correctness primitive. `CGEventPostToPid` can report no transport error while a native application ignores the event. In `auto` mode MDB can retry once through the foreground compatibility path only after an explicit semantic `verify` clause fails; explicit `background` mode never activates the target. Consequential raw input should therefore carry a postcondition.
+PID-targeted input is a UX optimization, not a stronger correctness primitive. `CGEventPostToPid` can report no transport error while a native application ignores the event. In `auto` mode DarwinRelay can retry once through the foreground compatibility path only after an explicit semantic `verify` clause fails; explicit `background` mode never activates the target. Consequential raw input should therefore carry a postcondition.
 
 Display/window/region coordinates use Quartz global display space. Explicit display-local routing is translated by the helper. This is a correctness convention, not isolation: a coordinate action can affect whichever UI occupies that location when it is emitted, so semantic refs plus re-observation are preferred whenever Accessibility exposes the target.
 
 `ui_file_dialog` is intentionally scoped to Apple's standard NSSavePanel/NSOpenPanel behavior. It does not bypass file permissions, sandbox/TCC checks, or application-specific authorization UI; it only navigates and confirms the same panel visible in the logged-in session.
 
-Chrome's background extension remains the preferred path for ordinary web-page work. The private full-control `ui_*` surface is intentionally capable of operating a **foreground** Chrome window when OS/browser UI or another visual surface cannot be handled through the background extension. Consequently the stronger upstream statement that Chrome GUI automation is structurally background-only applies to `shell_exec`/`shell_start` routing, not to the new full-desktop input surface.
+Chrome's background extension remains the preferred path for ordinary web-page work. The native `ui_*` surface is intentionally capable of operating a **foreground** Chrome window when OS/browser UI or another visual surface cannot be handled through the background extension. Consequently the stronger upstream statement that Chrome GUI automation is structurally background-only applies to `shell_exec`/`shell_start` routing, not to the new full-desktop input surface.
 
 ## Background-first desktop GUI policy
 
-Native macOS Accessibility/AppleScript/JXA automation is different from the Chrome extension path. Driving Slack, Finder, System Settings, or another desktop app can inherently require that app to become frontmost. Mac Developer Bridge cannot generically make such UI scripting invisible without changing what operation is being performed.
+Native macOS Accessibility/AppleScript/JXA automation is different from the Chrome extension path. Driving Slack, Finder, System Settings, or another desktop app can inherently require that app to become frontmost. DarwinRelay cannot generically make such UI scripting invisible without changing what operation is being performed.
 
-`MAC_DEV_BRIDGE_GUI_FOCUS_POLICY=background-first` remains the routing preference: use background browser/API paths first. In relaxed approval mode, native GUI control is allowed without an additional approval file when execution genuinely requires it. Direct Chrome automation through `shell_exec`/`shell_start` remains forced through the background extension; the private `ui_*` desktop surface is a separate foreground-capable fallback. If the operator turns on **Strict approvals**, detected shell GUI actions and dedicated native mutation tools consume a single-use, app-scoped, maximum-five-minute grant from `scripts/approve-foreground-gui.sh`. A model-supplied environment variable does not disable Strict mode.
+`DARWINRELAY_GUI_FOCUS_POLICY=background-first` remains the routing preference: use background browser/API paths first. In relaxed approval mode, native GUI control is allowed without an additional approval file when execution genuinely requires it. Direct Chrome automation through `shell_exec`/`shell_start` remains forced through the background extension; the `ui_*` desktop surface is a separate foreground-capable fallback. If the operator turns on **Strict approvals**, detected shell GUI actions and dedicated native mutation tools consume a single-use, app-scoped, maximum-five-minute grant from `scripts/approve-foreground-gui.sh`. A model-supplied environment variable does not disable Strict mode.
 
-Prefer an API/MCP connector first, then the service's web UI through the selected-profile `MDB` Chrome group, before native GUI scripting. For example, Slack Web can be automated through the background Chrome path while native Slack Accessibility scripting cannot reliably stay in the background.
+Prefer an API/MCP connector first, then the service's web UI through the selected-profile `DarwinRelay` Chrome group, before native GUI scripting. For example, Slack Web can be automated through the background Chrome path while native Slack Accessibility scripting cannot reliably stay in the background.
 
 Strict approvals is an operator-UX/drift control, **not containment**. The bridge still exposes unrestricted shell under the macOS user. Same-user code can forge approval state, invoke lower-level OS mechanisms, modify bridge code, or otherwise bypass a policy implemented by that same unrestricted process. In relaxed mode foreground GUI execution is allowed when needed; in Strict mode the documented foreground path requires an explicit short-lived operator action.
 
@@ -345,7 +345,7 @@ Even when unrestricted access is intentional:
 ./scripts/disable.sh
 
 # Or, if you ran install.sh (Tunnel transport):
-~/.local/share/mac-developer-bridge/scripts/disable.sh
+~/.local/share/darwinrelay/scripts/disable.sh
 ```
 
 **Removing the unlock file is now fail-closed.** `bridge.mjs` re-reads it before every tool call and exits 78 when it is gone, so `rm` alone refuses the next call rather than letting an in-flight bridge keep answering `200`. A `shell_exec` already in flight is **killed** on revocation: the bridge SIGKILLs each in-flight command's process group before exiting, so a command cannot outlive the latch. Its caller still gets no result for that call. Detached `shell_start` jobs are a separate case — they outlive the bridge by design, and `disable.sh` reclaims them from the recorded process groups.
@@ -361,14 +361,14 @@ It exits non-zero and warns if any of those survive, if the unlock file could no
 
 Limits worth knowing:
 
-- The port probe only covers `MAC_DEV_BRIDGE_HTTP_PORT` as seen by *your* shell.
+- The port probe only covers `DARWINRELAY_HTTP_PORT` as seen by *your* shell.
 - A job whose metadata file was deleted cannot be found at all. Job metadata is also never pruned, so an old entry whose pid has been recycled can be reported as a live job. Run `shell_job_list` before disabling if this matters.
 - A job process that left its group (`setsid`, a double-forking daemon) is in neither the signal list nor the verification, and the script says so on stdout.
-- `disable.sh` reads `MAC_DEV_BRIDGE_DATA_DIR`, `MAC_DEV_BRIDGE_INSTALL_DIR`, `MAC_DEV_BRIDGE_UNLOCK_FILE`, `MAC_DEV_BRIDGE_HTTP_PORT` and `LAUNCHCTL_BIN` from *your* shell, not from the running process. If the deployment set any of them, the responding shell must set the same values. `MAC_DEV_BRIDGE_UNLOCK_FILE` is the one that bites: with the wrong path `disable.sh` reports `Unlock file already absent` — a reassuring line — and can still exit 0 while the real latch is armed.
+- `disable.sh` reads `DARWINRELAY_DATA_DIR`, `DARWINRELAY_INSTALL_DIR`, `DARWINRELAY_UNLOCK_FILE`, `DARWINRELAY_HTTP_PORT` and `LAUNCHCTL_BIN` from *your* shell, not from the running process. If the deployment set any of them, the responding shell must set the same values. `DARWINRELAY_UNLOCK_FILE` is the one that bites: with the wrong path `disable.sh` reports `Unlock file already absent` — a reassuring line — and can still exit 0 while the real latch is armed.
 
 Removing the unlock file **is** an incident-response control: `bridge.mjs` re-reads it before every tool call, so the next call is refused and the process exits 78. What it does not do is reach across the two gaps named above — an already-executing command, and detached `shell_start` jobs. `disable.sh` covers those.
 
-One exception, and it is the important one: a bridge started with `MAC_DEV_BRIDGE_FULL_ACCESS_ACK` set in its environment **never reads the file**, so deleting it changes nothing for that process — not for its tool calls, and not for its live pty sessions or child MCP servers either. Prefer the unlock file for anything you may need to revoke.
+One exception, and it is the important one: a bridge started with `DARWINRELAY_FULL_ACCESS_ACK` set in its environment **never reads the file**, so deleting it changes nothing for that process — not for its tool calls, and not for its live pty sessions or child MCP servers either. Prefer the unlock file for anything you may need to revoke.
 
 That exception no longer propagates. `bridge.mjs` captures the variable at startup and deletes it from its own environment, so no `shell_exec` or `shell_start` child inherits it. Previously every child did, which meant a single tool call could re-launch the bridge with the acknowledgement pre-set and produce a process the kill switch could not stop — a route around the latch, opened by the tool the latch exists to gate.
 

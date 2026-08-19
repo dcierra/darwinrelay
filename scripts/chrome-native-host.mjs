@@ -7,13 +7,13 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-const DATA_DIR = process.env.MAC_DEV_BRIDGE_DATA_DIR
-  || path.join(os.homedir(), "Library", "Application Support", "MacDeveloperBridge");
-const SOCKET_PATH = process.env.MAC_DEV_BRIDGE_CHROME_SOCKET
+const DATA_DIR = process.env.DARWINRELAY_DATA_DIR
+  || path.join(os.homedir(), "Library", "Application Support", "DarwinRelay");
+const SOCKET_PATH = process.env.DARWINRELAY_CHROME_SOCKET
   || path.join(DATA_DIR, "chrome-background.sock");
-const PID_FILE = process.env.MAC_DEV_BRIDGE_CHROME_NATIVE_PID_FILE
+const PID_FILE = process.env.DARWINRELAY_CHROME_NATIVE_PID_FILE
   || path.join(DATA_DIR, "chrome-native-host.pid");
-const PROFILE_BINDING_FILE = process.env.MAC_DEV_BRIDGE_CHROME_PROFILE_BINDING_FILE
+const PROFILE_BINDING_FILE = process.env.DARWINRELAY_CHROME_PROFILE_BINDING_FILE
   || path.join(DATA_DIR, "chrome-background-profile.json");
 const MAX_NATIVE_MESSAGE_BYTES = 8 * 1024 * 1024;
 const MAX_SOCKET_LINE_BYTES = 2 * 1024 * 1024;
@@ -22,7 +22,7 @@ const GRANTLESS_EXTENSION_METHODS = new Set(["status", "workspace.status", "work
 
 function normalizeExtensionMethod(method) {
   // Old/stale clients may still issue tabs.open directly. Never forward that
-  // loose-tab primitive: all opens must lease from the managed MDB workspace.
+  // loose-tab primitive: all opens must lease from the managed DarwinRelay workspace.
   return method === "tabs.open" ? "workspace.open" : method;
 }
 
@@ -105,7 +105,7 @@ function handleNativeMessage(message) {
       extensionReady = !reportsSignedIn;
       profileError = extensionReady ? null : {
         code: "CHROME_PROFILE_MISMATCH",
-        message: `The Mac Developer Bridge extension is connected from a signed-in Chrome profile, but ${profileBinding.profileName} (${profileBinding.profileDirectory}) is configured as a dedicated local signed-out profile. Re-run install-background-chrome.sh if that profile was intentionally signed in.`,
+        message: `The DarwinRelay extension is connected from a signed-in Chrome profile, but ${profileBinding.profileName} (${profileBinding.profileDirectory}) is configured as a dedicated local signed-out profile. Re-run install-background-chrome.sh if that profile was intentionally signed in.`,
       };
     } else {
       const emailMatch = signedIn && profile.email.toLowerCase() === profileBinding.expectedEmail.toLowerCase();
@@ -114,8 +114,8 @@ function handleNativeMessage(message) {
       profileError = extensionReady ? null : {
         code: !signedIn ? "CHROME_PROFILE_SIGNED_OUT" : "CHROME_PROFILE_MISMATCH",
         message: !signedIn
-          ? `The Mac Developer Bridge extension is running in a Chrome profile with no signed-in primary account. Expected ${profileBinding.expectedEmail}.`
-          : `The Mac Developer Bridge extension is running in the wrong Chrome profile (${profile.email || "unknown"}). Expected ${profileBinding.expectedEmail}.`,
+          ? `The DarwinRelay extension is running in a Chrome profile with no signed-in primary account. Expected ${profileBinding.expectedEmail}.`
+          : `The DarwinRelay extension is running in the wrong Chrome profile (${profile.email || "unknown"}). Expected ${profileBinding.expectedEmail}.`,
       };
     }
     extensionInfo = {

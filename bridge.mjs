@@ -23,26 +23,26 @@ const BRIDGE_VERSION = (() => {
   } catch {}
   return "0.0.0-unknown";
 })();
-const SERVER_NAME = "mac-developer-bridge";
-const SERVER_TITLE = "Mac Developer Bridge";
+const SERVER_NAME = "darwinrelay";
+const SERVER_TITLE = "DarwinRelay";
 const MODERN_PROTOCOL = "2026-07-28";
 const LEGACY_PROTOCOLS = new Set(["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]);
 const HOME = os.homedir();
-const APP_SUPPORT_DIR = process.env.MAC_DEV_BRIDGE_DATA_DIR || path.join(HOME, "Library", "Application Support", "MacDeveloperBridge");
+const APP_SUPPORT_DIR = process.env.DARWINRELAY_DATA_DIR || path.join(HOME, "Library", "Application Support", "DarwinRelay");
 const JOB_DIR = path.join(APP_SUPPORT_DIR, "jobs");
-const LOG_DIR = process.env.MAC_DEV_BRIDGE_LOG_DIR || path.join(HOME, "Library", "Logs", "MacDeveloperBridge");
-const AUDIT_LOG = process.env.MAC_DEV_BRIDGE_AUDIT_LOG || path.join(LOG_DIR, "audit.jsonl");
-const DEFAULT_OUTPUT_BYTES = clampInt(process.env.MAC_DEV_BRIDGE_DEFAULT_OUTPUT_BYTES, 1_000_000, 1_024, 8_000_000);
-const MAX_OUTPUT_BYTES = clampInt(process.env.MAC_DEV_BRIDGE_MAX_OUTPUT_BYTES, 8_000_000, 1_024, 64_000_000);
-const AUDIT_MODE = ["off", "metadata", "full"].includes(process.env.MAC_DEV_BRIDGE_AUDIT_MODE || "metadata")
-  ? (process.env.MAC_DEV_BRIDGE_AUDIT_MODE || "metadata")
+const LOG_DIR = process.env.DARWINRELAY_LOG_DIR || path.join(HOME, "Library", "Logs", "DarwinRelay");
+const AUDIT_LOG = process.env.DARWINRELAY_AUDIT_LOG || path.join(LOG_DIR, "audit.jsonl");
+const DEFAULT_OUTPUT_BYTES = clampInt(process.env.DARWINRELAY_DEFAULT_OUTPUT_BYTES, 1_000_000, 1_024, 8_000_000);
+const MAX_OUTPUT_BYTES = clampInt(process.env.DARWINRELAY_MAX_OUTPUT_BYTES, 8_000_000, 1_024, 64_000_000);
+const AUDIT_MODE = ["off", "metadata", "full"].includes(process.env.DARWINRELAY_AUDIT_MODE || "metadata")
+  ? (process.env.DARWINRELAY_AUDIT_MODE || "metadata")
   : "metadata";
 const DEFAULT_SHELL = process.platform === "darwin" && fs.existsSync("/bin/zsh")
   ? "/bin/zsh"
   : fs.existsSync("/bin/bash")
     ? "/bin/bash"
     : "/bin/sh";
-const SHELL = process.env.MAC_DEV_BRIDGE_SHELL || DEFAULT_SHELL;
+const SHELL = process.env.DARWINRELAY_SHELL || DEFAULT_SHELL;
 const CODEX_BIN = process.env.CODEX_BIN || "codex";
 const MAC_UI_HELPER = resolveMacUiHelper({ bridgeDir: BRIDGE_DIR });
 const MAC_UI_AVAILABLE = macUiHelperAvailable(MAC_UI_HELPER);
@@ -54,24 +54,24 @@ const ADVANCED_BROWSER = advancedBrowserConfig();
 
 // Interactive pty sessions. Every limit below is a bound on a publicly reachable
 // endpoint, so each one carries the number it was measured against.
-const PTY_HELPER_PERL = process.env.MAC_DEV_BRIDGE_PTY_PERL || "/usr/bin/perl";
-const PTY_HELPER_PL = process.env.MAC_DEV_BRIDGE_PTY_HELPER || path.join(BRIDGE_DIR, "lib", "ptyhelper.pl");
+const PTY_HELPER_PERL = process.env.DARWINRELAY_PTY_PERL || "/usr/bin/perl";
+const PTY_HELPER_PL = process.env.DARWINRELAY_PTY_HELPER || path.join(BRIDGE_DIR, "lib", "ptyhelper.pl");
 // kern.tty.ptmx_max is 511 SYSTEM-WIDE (measured, with 20 already in use), so
 // exhausting it breaks Terminal.app, iTerm and ssh for the human at the keyboard.
 // Eight helpers at ~7 MB RSS is a trivial share of that.
-const PTY_MAX_SESSIONS = clampInt(process.env.MAC_DEV_BRIDGE_PTY_MAX_SESSIONS, 8, 1, 64);
+const PTY_MAX_SESSIONS = clampInt(process.env.DARWINRELAY_PTY_MAX_SESSIONS, 8, 1, 64);
 // Per-session output retention. `yes` inside a session out-produces any client, so
 // an unbounded chunk list here is a remote-driven memory leak.
-const PTY_RING_BYTES = clampInt(process.env.MAC_DEV_BRIDGE_PTY_RING_BYTES, 262_144, 4_096, 4_000_000);
+const PTY_RING_BYTES = clampInt(process.env.DARWINRELAY_PTY_RING_BYTES, 262_144, 4_096, 4_000_000);
 // The real bound is per-item cap x item count, which is why the session table
 // itself is capped at PTY_MAX_SESSIONS entries including exited ones.
 const PTY_RING_GLOBAL_BYTES = PTY_MAX_SESSIONS * PTY_RING_BYTES;
 // A forgotten interactive shell is the same exposure as an orphan. Env override
 // exists so tests can drive reaping without sleeping for minutes.
-const PTY_IDLE_TIMEOUT_MS = clampInt(process.env.MAC_DEV_BRIDGE_PTY_IDLE_TIMEOUT_MS, 900_000, 1_000, 3_600_000);
-const PTY_MAX_LIFETIME_MS = clampInt(process.env.MAC_DEV_BRIDGE_PTY_MAX_LIFETIME_MS, 28_800_000, 5_000, 86_400_000);
+const PTY_IDLE_TIMEOUT_MS = clampInt(process.env.DARWINRELAY_PTY_IDLE_TIMEOUT_MS, 900_000, 1_000, 3_600_000);
+const PTY_MAX_LIFETIME_MS = clampInt(process.env.DARWINRELAY_PTY_MAX_LIFETIME_MS, 28_800_000, 5_000, 86_400_000);
 const PTY_WRITE_MAX = 65_536;
-const PTY_START_TIMEOUT_MS = clampInt(process.env.MAC_DEV_BRIDGE_PTY_START_TIMEOUT_MS, 5_000, 500, 60_000);
+const PTY_START_TIMEOUT_MS = clampInt(process.env.DARWINRELAY_PTY_START_TIMEOUT_MS, 5_000, 500, 60_000);
 const PTY_ACK_TIMEOUT_MS = 2_000;
 const PTY_CLOSE_GRACE_MS = 2_000;
 // How long a session may still report exited:false after the helper process is
@@ -89,7 +89,7 @@ const PTY_SWEEP_MS = 5_000;
 // Bounds how long a live session can outlive a removed unlock file while the
 // client is making no calls at all. Without this interval, "removing the unlock
 // file kills pty sessions" is false whenever the client simply stops polling.
-const UNLOCK_RECHECK_MS = clampInt(process.env.MAC_DEV_BRIDGE_UNLOCK_RECHECK_MS, 3_000, 250, 60_000);
+const UNLOCK_RECHECK_MS = clampInt(process.env.DARWINRELAY_UNLOCK_RECHECK_MS, 3_000, 250, 60_000);
 const PTY_TERMS = ["xterm-256color", "xterm", "vt100", "dumb"];
 const PTY_SIGNALS = ["INT", "TERM", "KILL", "HUP", "QUIT", "USR1", "USR2", "WINCH", "TSTP", "CONT"];
 
@@ -108,9 +108,9 @@ const FULL_ACCESS_ACK = "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS";
 //
 // Behaviour for THIS process is unchanged: the captured value still unlocks, exactly
 // as documented in SECURITY.md.
-const FULL_ACCESS_ACK_FROM_ENV = process.env.MAC_DEV_BRIDGE_FULL_ACCESS_ACK;
-delete process.env.MAC_DEV_BRIDGE_FULL_ACCESS_ACK;
-const FULL_ACCESS_UNLOCK_FILE = process.env.MAC_DEV_BRIDGE_UNLOCK_FILE || path.join(APP_SUPPORT_DIR, "FULL_ACCESS_ENABLED");
+const FULL_ACCESS_ACK_FROM_ENV = process.env.DARWINRELAY_FULL_ACCESS_ACK;
+delete process.env.DARWINRELAY_FULL_ACCESS_ACK;
+const FULL_ACCESS_UNLOCK_FILE = process.env.DARWINRELAY_UNLOCK_FILE || path.join(APP_SUPPORT_DIR, "FULL_ACCESS_ENABLED");
 
 await Promise.all([
   fsp.mkdir(APP_SUPPORT_DIR, { recursive: true, mode: 0o700 }),
@@ -135,7 +135,7 @@ if (!fullAccessUnlocked) {
   }
 }
 if (!fullAccessUnlocked) {
-  stderr(`Refusing to start unrestricted bridge. Create ${FULL_ACCESS_UNLOCK_FILE} containing ${FULL_ACCESS_ACK}, or set MAC_DEV_BRIDGE_FULL_ACCESS_ACK to that exact value.`);
+  stderr(`Refusing to start unrestricted bridge. Create ${FULL_ACCESS_UNLOCK_FILE} containing ${FULL_ACCESS_ACK}, or set DARWINRELAY_FULL_ACCESS_ACK to that exact value.`);
   process.exit(78);
 }
 
@@ -256,11 +256,11 @@ function requireInteger(args, key, min, max) {
   return value;
 }
 
-const GUI_FOCUS_POLICY = process.env.MAC_DEV_BRIDGE_GUI_FOCUS_POLICY || "background-first";
-const SETTINGS_FILE = process.env.MAC_DEV_BRIDGE_SETTINGS_FILE || path.join(APP_SUPPORT_DIR, "settings.json");
+const GUI_FOCUS_POLICY = process.env.DARWINRELAY_GUI_FOCUS_POLICY || "background-first";
+const SETTINGS_FILE = process.env.DARWINRELAY_SETTINGS_FILE || path.join(APP_SUPPORT_DIR, "settings.json");
 const DEFAULT_OPERATOR_SETTINGS = Object.freeze({ strictApprovals: false });
 const RELAXED_BROWSER_PATTERNS = Object.freeze(["http://*/*", "https://*/*"]);
-const FOREGROUND_GUI_APPROVAL_FILE = process.env.MAC_DEV_BRIDGE_FOREGROUND_GUI_APPROVAL_FILE
+const FOREGROUND_GUI_APPROVAL_FILE = process.env.DARWINRELAY_FOREGROUND_GUI_APPROVAL_FILE
   || path.join(APP_SUPPORT_DIR, "FOREGROUND_GUI_APPROVED");
 const FOREGROUND_GUI_MAX_TTL_MS = 5 * 60 * 1000;
 
@@ -327,7 +327,7 @@ function guiFocusRisk(command) {
 }
 
 
-// Chrome is different from other desktop apps: MDB has a dedicated background
+// Chrome is different from other desktop apps: DarwinRelay has a dedicated background
 // browser path that preserves the signed-in profile without taking over the
 // operator's screen. Approval strictness must never decide whether a model may
 // bypass that path. Relaxed mode removes approval ceremony; it does NOT make
@@ -347,10 +347,10 @@ function chromeBackgroundRoutingRisk(command) {
     const explicitlyChrome = /(?:^|\s)-a\s+(?:["']Google Chrome["']|Google\\\s+Chrome)(?:\s|$)/im.test(command)
       || /(?:^|\s)-b\s+["']?com\.google\.Chrome["']?(?:\s|$)/im.test(command);
     const opensWebUrl = /\bhttps?:\/\/[^\s"']+/i.test(command);
-    // Even `open -g https://…` bypasses the MDB group and creates an
+    // Even `open -g https://…` bypasses the DarwinRelay group and creates an
     // unowned browser tab, so all shell-opened web URLs are refused.
     if (explicitlyChrome || opensWebUrl) {
-      return { reason: explicitlyChrome ? "chrome-open-app" : "browser-open-bypasses-mdb", apps: ["Google Chrome"] };
+      return { reason: explicitlyChrome ? "chrome-open-app" : "browser-open-bypasses-darwinrelay", apps: ["Google Chrome"] };
     }
   }
 
@@ -778,7 +778,7 @@ const UI_CAPTURE_PROPERTIES = {
   format: { type: "string", enum: ["jpeg", "png"], default: "jpeg" },
   quality: { type: "number", minimum: 0.1, maximum: 1, default: 0.78 },
   include_cursor: { type: "boolean", default: false },
-  show_virtual_cursor: { type: "boolean", default: true, description: "Overlay MDB's independent virtual AI cursor on returned screenshots when it is visible." },
+  show_virtual_cursor: { type: "boolean", default: true, description: "Overlay DarwinRelay's independent virtual AI cursor on returned screenshots when it is visible." },
 };
 const UI_WAIT_PROPERTIES = {
   pid: { type: "integer", minimum: 1 }, ref: { type: "string" }, selector: UI_SELECTOR_SCHEMA,
@@ -881,7 +881,7 @@ const TOOLS = [
   {
     name: "ui_cursor",
     title: "Control independent AI cursor",
-    description: "Move/show/hide the click-through MDB virtual cursor without moving the physical mouse. This cursor is visual only; ui_mouse performs actual input. Screenshot tools can render the same cursor position.",
+    description: "Move/show/hide the click-through DarwinRelay virtual cursor without moving the physical mouse. This cursor is visual only; ui_mouse performs actual input. Screenshot tools can render the same cursor position.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1119,7 +1119,7 @@ const TOOLS = [
   {
     name: "ui_clipboard_write",
     title: "Write Mac clipboard",
-    description: "Replace the general pasteboard with text. Clipboard text is always redacted from the MDB audit log.",
+    description: "Replace the general pasteboard with text. Clipboard text is always redacted from the DarwinRelay audit log.",
     inputSchema: {
       type: "object",
       properties: { text: { type: "string", maxLength: 500000 } },
@@ -1131,7 +1131,7 @@ const TOOLS = [
   {
     name: "browser_cdp_status",
     title: "Inspect optional raw CDP backend",
-    description: "Inspect the explicit opt-in Browser Harness raw-CDP backend and its daemon socket. This backend is separate from MDB's managed background Chrome workspace and is disabled unless MAC_DEV_BRIDGE_ADVANCED_BROWSER=1 was set before startup.",
+    description: "Inspect the explicit opt-in Browser Harness raw-CDP backend and its daemon socket. This backend is separate from DarwinRelay's managed background Chrome workspace and is disabled unless DARWINRELAY_ADVANCED_BROWSER=1 was set before startup.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
@@ -1170,15 +1170,15 @@ const TOOLS = [
   },
   {
     name: "chrome_workspace_status",
-    title: "MDB Chrome workspace status",
-    description: "Inspect the extension-owned MDB Chrome tab group and reusable background-tab pool. This is local extension state only and does not access authenticated websites, so it does not consume a personal-browser URL grant.",
+    title: "DarwinRelay Chrome workspace status",
+    description: "Inspect the extension-owned DarwinRelay Chrome tab group and reusable background-tab pool. This is local extension state only and does not access authenticated websites, so it does not consume a personal-browser URL grant.",
     inputSchema: { type: "object", additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   },
   {
     name: "chrome_workspace_setup",
-    title: "Set up MDB Chrome workspace",
-    description: "Create or expand the extension-owned MDB Chrome tab group and its reusable background-tab pool. This is a one-time/local setup action and does not access authenticated websites. On macOS, setup refuses to create tabs unless a normal Chrome window is already focused, because Chrome may otherwise steal focus even for active:false tab creation.",
+    title: "Set up DarwinRelay Chrome workspace",
+    description: "Create or expand the extension-owned DarwinRelay Chrome tab group and its reusable background-tab pool. This is a one-time/local setup action and does not access authenticated websites. On macOS, setup refuses to create tabs unless a normal Chrome window is already focused, because Chrome may otherwise steal focus even for active:false tab creation.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1187,7 +1187,7 @@ const TOOLS = [
           minimum: 1,
           maximum: 8,
           default: 4,
-          description: "Number of reusable extension-owned tabs to keep in the MDB group.",
+          description: "Number of reusable extension-owned tabs to keep in the DarwinRelay group.",
         },
       },
       additionalProperties: false,
@@ -1212,7 +1212,7 @@ const TOOLS = [
   {
     name: "chrome_open",
     title: "Open background Chrome tab",
-    description: "Open a URL in an idle tab from the persistent MDB Chrome tab group. Routine calls never create a new Chrome tab, which avoids macOS focus theft. Relaxed mode is the default and permits normal HTTP/HTTPS sites without per-site approvals; Strict approvals optionally restores scoped URL grants.",
+    description: "Open a URL in an idle tab from the persistent DarwinRelay Chrome tab group. Routine calls never create a new Chrome tab, which avoids macOS focus theft. Relaxed mode is the default and permits normal HTTP/HTTPS sites without per-site approvals; Strict approvals optionally restores scoped URL grants.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1226,7 +1226,7 @@ const TOOLS = [
   {
     name: "chrome_navigate",
     title: "Navigate Chrome tab in background",
-    description: "Navigate an existing MDB Chrome tab without selecting it or activating Chrome. In relaxed mode normal HTTP/HTTPS navigation needs no per-site approval; Strict approvals restricts navigation to active scoped grants.",
+    description: "Navigate an existing DarwinRelay Chrome tab without selecting it or activating Chrome. In relaxed mode normal HTTP/HTTPS navigation needs no per-site approval; Strict approvals restricts navigation to active scoped grants.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1241,7 +1241,7 @@ const TOOLS = [
   {
     name: "chrome_snapshot",
     title: "Read Chrome page in background",
-    description: "Read visible text and a bounded list of interactive elements from an MDB Chrome tab without activating Chrome. Password input values are redacted. Strict approvals, when enabled, restricts readable URLs to active scoped grants.",
+    description: "Read visible text and a bounded list of interactive elements from an DarwinRelay Chrome tab without activating Chrome. Password input values are redacted. Strict approvals, when enabled, restricts readable URLs to active scoped grants.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1257,7 +1257,7 @@ const TOOLS = [
   {
     name: "chrome_click",
     title: "Click Chrome element in background",
-    description: "Programmatically click an element in an MDB Chrome tab without activating Chrome. Use selectors returned by chrome_snapshot. Relaxed mode is the default; Strict approvals optionally restricts sites. Trusted-user-gesture flows, CAPTCHAs, native dialogs, and file pickers may still require foreground/manual interaction.",
+    description: "Programmatically click an element in an DarwinRelay Chrome tab without activating Chrome. Use selectors returned by chrome_snapshot. Relaxed mode is the default; Strict approvals optionally restricts sites. Trusted-user-gesture flows, CAPTCHAs, native dialogs, and file pickers may still require foreground/manual interaction.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1272,7 +1272,7 @@ const TOOLS = [
   {
     name: "chrome_fill",
     title: "Fill Chrome field in background",
-    description: "Fill an input, textarea, select, or contenteditable element in an MDB Chrome tab without activating Chrome. Relaxed mode is the default; Strict approvals optionally restricts sites. File inputs remain foreground-only.",
+    description: "Fill an input, textarea, select, or contenteditable element in an DarwinRelay Chrome tab without activating Chrome. Relaxed mode is the default; Strict approvals optionally restricts sites. File inputs remain foreground-only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1289,7 +1289,7 @@ const TOOLS = [
   {
     name: "chrome_close",
     title: "Close background Chrome tab",
-    description: "Release an MDB workspace tab back to the pool, or close a non-workspace Chrome tab. Strict approvals affects site access, not local workspace cleanup.",
+    description: "Release an DarwinRelay workspace tab back to the pool, or close a non-workspace Chrome tab. Strict approvals affects site access, not local workspace cleanup.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1661,7 +1661,7 @@ const TOOLS = [
 // authority over "is full access permitted right now" belongs here, next to the
 // tools it gates. One stat+read per call is nothing beside spawning a login shell.
 //
-// MAC_DEV_BRIDGE_FULL_ACCESS_ACK in the environment still unlocks, unchanged —
+// DARWINRELAY_FULL_ACCESS_ACK in the environment still unlocks, unchanged —
 // but that is the operator's own process env, not a file anyone can revoke, so
 // it is deliberately not a kill-switch surface.
 // Foreground shell_exec and native desktop-helper children, so revocation can reclaim them.
@@ -2177,7 +2177,7 @@ function sweepPtyTtyOnClose(session) {
 // writeJobMetadata, so a federated child lands in the same $DATA_DIR/jobs
 // directory scripts/disable.sh already scans, with no change to its discovery
 // loop.
-const PERSONAL_BROWSER_APPROVAL_FILE = process.env.MAC_DEV_BRIDGE_PERSONAL_APPROVAL_FILE
+const PERSONAL_BROWSER_APPROVAL_FILE = process.env.DARWINRELAY_PERSONAL_APPROVAL_FILE
   || path.join(APP_SUPPORT_DIR, "PERSONAL_BROWSER_APPROVED");
 
 const federation = createFederation({
@@ -2207,7 +2207,7 @@ async function personalBrowserApprovalPresent() {
 }
 
 const BACKGROUND_CHROME_PROVIDER_KEY = "chrome-background";
-const BACKGROUND_CHROME_GRANT_DIR = process.env.MAC_DEV_BRIDGE_BACKGROUND_CHROME_GRANT_DIR
+const BACKGROUND_CHROME_GRANT_DIR = process.env.DARWINRELAY_BACKGROUND_CHROME_GRANT_DIR
   || path.join(APP_SUPPORT_DIR, "chrome-background-grants");
 const BACKGROUND_CHROME_MAX_TTL_MS = 15 * 60 * 1000;
 const BACKGROUND_CHROME_MAX_GRANT_FILES = 256;
@@ -2445,7 +2445,7 @@ async function ensureBackgroundChromeGrant() {
 
 async function requireAdvancedBrowserAccess(toolName) {
   if (!ADVANCED_BROWSER.enabled) {
-    const error = new Error("Advanced Browser/CDP backend is disabled; set MAC_DEV_BRIDGE_ADVANCED_BROWSER=1 before starting MDB.");
+    const error = new Error("Advanced Browser/CDP backend is disabled; set DARWINRELAY_ADVANCED_BROWSER=1 before starting DarwinRelay.");
     error.code = "ADVANCED_BROWSER_DISABLED";
     throw error;
   }
@@ -4329,7 +4329,7 @@ async function dispatchTool(name, args) {
       const cwd = optionalString(args, "cwd", HOME);
       const chromeRoutingRisk = chromeBackgroundRoutingRisk(command);
       if (chromeRoutingRisk) {
-        const error = new Error(`Direct Chrome GUI automation is blocked (${chromeRoutingRisk.reason}). Chrome web work must use the built-in chrome_* tools and the MDB tab group so it stays in the signed-in profile without stealing focus. This routing rule applies in both Relaxed and Strict approval modes.`);
+        const error = new Error(`Direct Chrome GUI automation is blocked (${chromeRoutingRisk.reason}). Chrome web work must use the built-in chrome_* tools and the DarwinRelay tab group so it stays in the signed-in profile without stealing focus. This routing rule applies in both Relaxed and Strict approval modes.`);
         error.code = "CHROME_BACKGROUND_REQUIRED";
         await audit(name, args, { blocked: true, chromeBackgroundRequired: true, chromeRoutingRisk }, error);
         throw error;
@@ -4364,7 +4364,7 @@ async function dispatchTool(name, args) {
       const command = requireString(args, "command");
       const chromeRoutingRisk = chromeBackgroundRoutingRisk(command);
       if (chromeRoutingRisk) {
-        const error = new Error(`Direct Chrome GUI automation is blocked (${chromeRoutingRisk.reason}). Chrome web work must use the built-in chrome_* tools and the MDB tab group so it stays in the signed-in profile without stealing focus. This routing rule applies in both Relaxed and Strict approval modes.`);
+        const error = new Error(`Direct Chrome GUI automation is blocked (${chromeRoutingRisk.reason}). Chrome web work must use the built-in chrome_* tools and the DarwinRelay tab group so it stays in the signed-in profile without stealing focus. This routing rule applies in both Relaxed and Strict approval modes.`);
         error.code = "CHROME_BACKGROUND_REQUIRED";
         await audit(name, args, { blocked: true, chromeBackgroundRequired: true, chromeRoutingRisk }, error);
         throw error;
@@ -5102,7 +5102,7 @@ async function handleMessage(message) {
       protocolVersion: negotiatedProtocol,
       capabilities: { tools: { listChanged: false } },
       serverInfo: serverInfo(),
-      instructions: "This bridge runs without a filesystem sandbox or command allowlist. Effective permissions equal the macOS user running it. Prefer codex_thread_read for persisted Codex history without model usage. On macOS, prefer the MDB chrome_* background workspace for normal logged-in web work; use ui_observe/ui_tree and semantic ui_action/ui_wait_for for native desktop/OS UI, with targeted screenshot/OCR/mouse/keyboard as fallback. Direct shell/AppleScript Chrome routes are refused, while the dedicated ui_* surface can operate foreground UI when necessary. Relaxed access is the default; Strict approvals adds URL scopes and one-use app-scoped native mutation approvals.",
+      instructions: "This bridge runs without a filesystem sandbox or command allowlist. Effective permissions equal the macOS user running it. Prefer codex_thread_read for persisted Codex history without model usage. On macOS, prefer the DarwinRelay chrome_* background workspace for normal logged-in web work; use ui_observe/ui_tree and semantic ui_action/ui_wait_for for native desktop/OS UI, with targeted screenshot/OCR/mouse/keyboard as fallback. Direct shell/AppleScript Chrome routes are refused, while the dedicated ui_* surface can operate foreground UI when necessary. Relaxed access is the default; Strict approvals adds URL scopes and one-use app-scoped native mutation approvals.",
     });
     return;
   }

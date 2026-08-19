@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/mdb-single-instance.XXXXXX")"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/darwinrelay-single-instance.XXXXXX")"
 FIRST=""
 cleanup() {
   if [[ -n "$FIRST" ]]; then
@@ -14,7 +14,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-BIN="$TMP/MacDevBridge"
+BIN="$TMP/DarwinRelay"
 DATA="$TMP/data"
 LOGS="$TMP/logs"
 mkdir -p "$DATA" "$LOGS"
@@ -26,7 +26,7 @@ xcrun swiftc -O \
   -o "$BIN" \
   "$ROOT/menubar/MenuBarApp.swift"
 
-MAC_DEV_BRIDGE_DATA_DIR="$DATA" MAC_DEV_BRIDGE_LOG_DIR="$LOGS" MAC_DEV_BRIDGE_HOME="$ROOT" \
+DARWINRELAY_DATA_DIR="$DATA" DARWINRELAY_LOG_DIR="$LOGS" DARWINRELAY_HOME="$ROOT" \
   "$BIN" >"$TMP/first.out" 2>"$TMP/first.err" &
 FIRST=$!
 for _ in $(seq 1 50); do [[ -f "$DATA/menubar.lock" ]] && break; sleep 0.1; done
@@ -50,7 +50,7 @@ BEFORE_HTTP="$(cat "$DATA/mcp-http.pid")"
 BEFORE_CF="$(cat "$DATA/cloudflared.pid")"
 
 set +e
-MAC_DEV_BRIDGE_DATA_DIR="$DATA" MAC_DEV_BRIDGE_LOG_DIR="$LOGS" MAC_DEV_BRIDGE_HOME="$ROOT" \
+DARWINRELAY_DATA_DIR="$DATA" DARWINRELAY_LOG_DIR="$LOGS" DARWINRELAY_HOME="$ROOT" \
   "$BIN" >"$TMP/second.out" 2>"$TMP/second.err"
 SECOND_RC=$?
 set -e

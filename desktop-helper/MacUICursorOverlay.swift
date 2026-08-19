@@ -51,7 +51,7 @@ final class CursorController: NSObject {
         view = CursorView(frame: NSRect(x: 0, y: 0, width: 28, height: 28))
         super.init()
         panel.contentView = view
-        panel.title = "Mac Developer Bridge AI Cursor"
+        panel.title = "DarwinRelay AI Cursor"
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false

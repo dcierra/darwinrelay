@@ -1,6 +1,6 @@
 # Native Desktop Control
 
-This private line extends Mac Developer Bridge into a native macOS computer-use runtime while preserving the existing shell/filesystem/PTY/Chrome architecture and the global unlock/kill switch.
+DarwinRelay includes a native macOS computer-use runtime alongside the shell/filesystem/PTY/Chrome architecture and the global unlock/kill switch.
 
 ## Architecture
 
@@ -88,11 +88,11 @@ ui_screenshot / ui_ocr
 
 - `foreground` — the compatibility path, posting through the global HID event tap; the caller may explicitly activate the target.
 - `background` — requires a target pid and posts CoreGraphics events directly to that process. The physical mouse is not warped and `preserve_focus=true` fails with `UI_FOCUS_CHANGED` if the target unexpectedly becomes frontmost. This mode never activates the target automatically.
-- `auto` — uses background delivery when a pid is supplied, otherwise foreground delivery. If the caller also supplied a semantic `verify` clause and the background attempt fails that postcondition, MDB may perform **one** foreground retry (`activate_target=true`) unless `allow_foreground_fallback=false`. No `verify` means no automatic fallback.
+- `auto` — uses background delivery when a pid is supplied, otherwise foreground delivery. If the caller also supplied a semantic `verify` clause and the background attempt fails that postcondition, DarwinRelay may perform **one** foreground retry (`activate_target=true`) unless `allow_foreground_fallback=false`. No `verify` means no automatic fallback.
 
 PID-targeted event APIs are best-effort: native applications are free to reject synthetic events without returning an actionable failure. Therefore a reported event-post success is not treated as proof that the UI changed; use semantic postconditions for consequential input. `ui_status.postEventsGranted` and the menu-bar `Input` indicator expose the separate CoreGraphics event-post permission.
 
-Installed desktop control uses the nested `MacDevBridge.app/Contents/Helpers/MacUIHelper` executable. The app, helper, and virtual-cursor overlay are signed with the same available Apple code-signing identity and stable identifiers. `MAC_DEV_BRIDGE_UI_HELPER` / `MAC_DEV_BRIDGE_UI_CURSOR_HELPER` are set by the menu app so the MCP runtime cannot accidentally fall back to a differently signed checkout binary. The menu permission row queries this exact helper. Use `scripts/desktop-doctor.sh --request` to ask macOS for the helper permissions and `scripts/desktop-doctor.sh` to verify them without prompting.
+Installed desktop control uses the nested `DarwinRelay.app/Contents/Helpers/MacUIHelper` executable. The app, helper, and virtual-cursor overlay are signed with the same available Apple code-signing identity and stable identifiers. `DARWINRELAY_UI_HELPER` / `DARWINRELAY_UI_CURSOR_HELPER` are set by the menu app so the MCP runtime cannot accidentally fall back to a differently signed checkout binary. The menu permission row queries this exact helper. Use `scripts/desktop-doctor.sh --request` to ask macOS for the helper permissions and `scripts/desktop-doctor.sh` to verify them without prompting.
 
 `AXEnhancedUserInterface` is enabled best-effort on application roots to improve the exposed tree for applications that support it; unsupported applications simply retain their normal AX behavior.
 
@@ -131,7 +131,7 @@ For `ui_mouse`, `ui_drag_drop`, and region screenshots, a display id can make co
 
 Display and desktop-independent window screenshots use ScreenCaptureKit. Region capture uses the native cross-display screenshot API on macOS 15.2+ and a fail-closed single-display fallback on older supported releases.
 
-Screenshot content is returned as MCP `image` blocks; base64 bytes are not duplicated into structured metadata or the audit log. When the MDB virtual cursor is visible, `ui_screenshot`/`ui_observe` render that independent cursor into the returned frame by default (`show_virtual_cursor=false` disables it) without moving or capturing the operator's physical pointer. JPEG is the bounded default, PNG is available for lossless inspection.
+Screenshot content is returned as MCP `image` blocks; base64 bytes are not duplicated into structured metadata or the audit log. When the DarwinRelay virtual cursor is visible, `ui_screenshot`/`ui_observe` render that independent cursor into the returned frame by default (`show_virtual_cursor=false` disables it) without moving or capturing the operator's physical pointer. JPEG is the bounded default, PNG is available for lossless inspection.
 
 `ui_ocr` uses `VNRecognizeTextRequest` locally. It returns recognized strings, confidence, normalized Vision bounds and top-left-origin pixel bounds in the returned image. Automatic language detection is the default and explicit recognition languages are supported.
 
@@ -186,11 +186,11 @@ Observation itself is privileged: screenshots, OCR, clipboard reads and ordinary
 
 ## Browser relationship
 
-Normal web work should still use the configured `chrome_*` MDB workspace because it can operate without routine focus theft. The selected Chrome profile may be account-bound or an explicitly isolated signed-out `dedicated-local` profile. Direct Chrome AppleScript/JXA/executable/shell-web-open paths remain rejected by `shell_exec`/`shell_start`.
+Normal web work should still use the configured `chrome_*` DarwinRelay workspace because it can operate without routine focus theft. The selected Chrome profile may be account-bound or an explicitly isolated signed-out `dedicated-local` profile. Direct Chrome AppleScript/JXA/executable/shell-web-open paths remain rejected by `shell_exec`/`shell_start`.
 
 The native `ui_*` surface is deliberately capable of foreground browser/OS interaction when a background extension cannot own the surface, such as native panels or visual-only controls.
 
-An optional Browser Harness-compatible raw-CDP adapter is available only when `MAC_DEV_BRIDGE_ADVANCED_BROWSER=1` was set before bridge startup. It talks to an already-running same-user Browser Harness daemon over its Unix socket and exposes raw CDP/session/events as `browser_cdp_*`; it neither installs Browser Harness nor executes arbitrary Python. This backend is independent of the managed `chrome_*` workspace and is blocked entirely while Strict approvals is enabled because arbitrary CDP cannot be reliably reduced to URL-pattern grants.
+An optional Browser Harness-compatible raw-CDP adapter is available only when `DARWINRELAY_ADVANCED_BROWSER=1` was set before bridge startup. It talks to an already-running same-user Browser Harness daemon over its Unix socket and exposes raw CDP/session/events as `browser_cdp_*`; it neither installs Browser Harness nor executes arbitrary Python. This backend is independent of the managed `chrome_*` workspace and is blocked entirely while Strict approvals is enabled because arbitrary CDP cannot be reliably reduced to URL-pattern grants.
 
 ## Validation
 
@@ -200,4 +200,4 @@ The desktop layer has two test tiers:
 2. a raw-CDP IPC fixture — Browser Harness-compatible socket framing, raw calls/session/events and fail-closed Strict-mode blocking;
 3. a real AppKit fixture — semantic set/press + postconditions, targeted AX query/hit-test, sequence bursts, ScreenCaptureKit window capture with virtual cursor metadata, Vision OCR, window geometry changes, native dialogs, visual-change waits, PID-targeted input mode, drag/drop, NSOpenPanel and NSSavePanel.
 
-The native fixture test builds everywhere on macOS. GitHub-hosted macOS is deliberately treated as a compile-only environment for the mutable native fixture because runner images can report Accessibility/Screen Recording while still failing `AXPress`/`CGEvent` delivery nondeterministically. The deterministic `desktop-control.mjs` suite exercises the complete MCP desktop surface in hosted CI; the real mutable AppKit E2E runs on an interactive Mac, or on self-hosted CI when `MDB_RUN_NATIVE_DESKTOP_E2E=1` is explicitly set. If an interactive run lacks Accessibility/Screen Recording, it reports that permission boundary and skips after the successful build.
+The native fixture test builds everywhere on macOS. GitHub-hosted macOS is deliberately treated as a compile-only environment for the mutable native fixture because runner images can report Accessibility/Screen Recording while still failing `AXPress`/`CGEvent` delivery nondeterministically. The deterministic `desktop-control.mjs` suite exercises the complete MCP desktop surface in hosted CI; the real mutable AppKit E2E runs on an interactive Mac, or on local maintainer runs when `DARWINRELAY_RUN_NATIVE_DESKTOP_E2E=1` is explicitly set. If an interactive run lacks Accessibility/Screen Recording, it reports that permission boundary and skips after the successful build.

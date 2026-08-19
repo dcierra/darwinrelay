@@ -3,7 +3,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 ROOT="$(cd "$HERE/.." && pwd -P)"
-OUT="${MAC_DEV_BRIDGE_UI_HELPER_OUTPUT:-$ROOT/bin/MacUIHelper}"
+OUT="${DARWINRELAY_UI_HELPER_OUTPUT:-$ROOT/bin/MacUIHelper}"
 SOURCES=("$ROOT/desktop-helper/MacUIHelper.swift" "$ROOT/desktop-helper/DesktopAdvanced.swift")
 source "$HERE/codesign-runtime.sh"
 
@@ -21,6 +21,6 @@ xcrun swiftc -O -parse-as-library \
   -o "$OUT" \
   "${SOURCES[@]}"
 chmod 0755 "$OUT"
-mdb_sign_runtime "$OUT" "local.mac-developer-bridge.ui-helper"
+darwinrelay_sign_runtime "$OUT" "io.github.dcierra.darwinrelay.ui-helper"
 codesign --verify --strict "$OUT" >/dev/null
 echo "$OUT"

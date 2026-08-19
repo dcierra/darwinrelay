@@ -4,7 +4,7 @@
 .LSOverride
 
 # Generated application bundle
-MacDevBridge.app/
+DarwinRelay.app/
 
 # Node/editor artifacts
 node_modules/

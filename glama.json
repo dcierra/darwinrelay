@@ -1,20 +1,21 @@
 {
   "$schema": "https://glama.ai/mcp/schemas/server.json",
   "maintainers": [
-    "alexanderradahl"
+    "dcierra"
   ],
-  "name": "Mac Developer Bridge",
-  "description": "Give ChatGPT a real terminal on your Mac: shell, unrestricted filesystem access, real PTY sessions, background jobs, and read-only Codex history.",
+  "name": "DarwinRelay",
+  "description": "Native macOS execution runtime for MCP agents: shell, PTY, background Chrome, and Accessibility-based desktop control.",
   "keywords": [
-    "chatgpt",
-    "codex",
-    "macos",
     "mcp",
-    "developer-tools",
-    "shell",
+    "mcp-server",
+    "macos",
+    "computer-use",
+    "accessibility",
+    "browser-automation",
     "terminal",
     "pty",
-    "local-first",
-    "ai-agent"
+    "developer-tools",
+    "ai-agents",
+    "local-first"
   ]
 }

@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Mac Developer Bridge Background Browser",
-  "version": "0.2.4",
-  "description": "Lets Mac Developer Bridge operate approved Chrome tabs without bringing Chrome to the foreground.",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq9QjCNUI8xWx8wNSCITv4TFRy2pYhd77cDUTmYFJqduaYwhplrkvbo1BB9wTn7VBKLe8ohNp4fnZz9T03il69oRPsYGRb5aHAdSVaYdCrOiGs7GN00wvwUf6d2lQeuslDd53SpTnXZdtGRMVRBeK4X4NyEksQHzxKpaeaRlT0R9qREp+TdiLfEh5Z6UImZ0ZeBVn7efazrNBYMARBjas3A/AbXUyH654TVMOAqePUpgj129g8ZGQjcPqOFKGqhAyyCVhpbJBU+1Kt7sX6wbIIREtjmryW7sqMba7TnubqCv2qTPLZNeHQVQaQpl75cYdL26lh8PXwSTHeQKX+3KwHwIDAQAB",
+  "name": "DarwinRelay Background Browser",
+  "version": "0.6.0",
+  "description": "Background Chrome control for DarwinRelay without routine focus theft.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0dzLyMy4YLiYEb6E98jOZXRs6jtFGRO2xp/8nZ5yDdOSRuagwy95LpljT4eCPiBi9UNQnsu24O5JoLe76sRyixF5pzbOLJ7Wac+j0YS+F5FXCn53sZvoNzLNNA+iXutcGYqqqPF3J+961p0I/0DBK0kk0iDVEGwKous/aqxHsZLC1ohSw6Z+rSndHpiXINdPbeVw+6HUydybX28EJOEcx2pNXXRscTNUUb+NKWbIV5+XbCSUttiZbUGfP+5U7ZN4w7XYmrywIyLThixuti7kt3nkPK+5krRldtxum3HmhIwPddXLV4UzDnktdQ2cXyj2LFZRmvLupNN5n/ut5Ky/zwIDAQAB",
   "permissions": [
     "tabs",
     "scripting",
@@ -26,7 +26,7 @@
     "128": "icons/icon-128.png"
   },
   "action": {
-    "default_title": "Mac Developer Bridge",
+    "default_title": "DarwinRelay",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",

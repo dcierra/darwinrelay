@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const bridge = path.resolve(here, "..", "bridge.mjs");
 const packageJson = JSON.parse(await fs.readFile(path.resolve(here, "..", "package.json"), "utf8"));
-const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mac-developer-bridge-test-"));
+const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "darwinrelay-test-"));
 const dataDir = path.join(tempRoot, "data");
 const logDir = path.join(tempRoot, "logs");
 const workDir = path.join(tempRoot, "work");
@@ -22,10 +22,10 @@ async function verifyLockedByDefault() {
     stdio: ["pipe", "pipe", "pipe"],
     env: {
       ...process.env,
-      MAC_DEV_BRIDGE_DATA_DIR: path.join(tempRoot, "locked-data"),
-      MAC_DEV_BRIDGE_LOG_DIR: path.join(tempRoot, "locked-logs"),
-      MAC_DEV_BRIDGE_UNLOCK_FILE: path.join(tempRoot, "locked-data", "FULL_ACCESS_ENABLED"),
-      MAC_DEV_BRIDGE_FULL_ACCESS_ACK: "",
+      DARWINRELAY_DATA_DIR: path.join(tempRoot, "locked-data"),
+      DARWINRELAY_LOG_DIR: path.join(tempRoot, "locked-logs"),
+      DARWINRELAY_UNLOCK_FILE: path.join(tempRoot, "locked-data", "FULL_ACCESS_ENABLED"),
+      DARWINRELAY_FULL_ACCESS_ACK: "",
     },
   });
   let stderr = "";
@@ -50,10 +50,10 @@ const child = spawn(process.execPath, [bridge], {
   stdio: ["pipe", "pipe", "pipe"],
   env: {
     ...process.env,
-    MAC_DEV_BRIDGE_DATA_DIR: dataDir,
-    MAC_DEV_BRIDGE_LOG_DIR: logDir,
-    MAC_DEV_BRIDGE_FOREGROUND_GUI_APPROVAL_FILE: foregroundApprovalFile,
-    MAC_DEV_BRIDGE_FULL_ACCESS_ACK: "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS",
+    DARWINRELAY_DATA_DIR: dataDir,
+    DARWINRELAY_LOG_DIR: logDir,
+    DARWINRELAY_FOREGROUND_GUI_APPROVAL_FILE: foregroundApprovalFile,
+    DARWINRELAY_FULL_ACCESS_ACK: "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS",
   },
 });
 const rl = readline.createInterface({ input: child.stdout });
@@ -171,7 +171,7 @@ try {
       },
     });
     assert.equal(relaxedWebOpenBlocked.result.isError, true);
-    assert.match(relaxedWebOpenBlocked.result.content[0].text, /MDB tab group/);
+    assert.match(relaxedWebOpenBlocked.result.content[0].text, /DarwinRelay tab group/);
 
     const relaxedBackgroundWebOpenBlocked = await request("relaxed-background-web-open-blocked", "tools/call", {
       _meta: meta,
@@ -181,7 +181,7 @@ try {
       },
     });
     assert.equal(relaxedBackgroundWebOpenBlocked.result.isError, true);
-    assert.match(relaxedBackgroundWebOpenBlocked.result.content[0].text, /MDB tab group/);
+    assert.match(relaxedBackgroundWebOpenBlocked.result.content[0].text, /DarwinRelay tab group/);
 
     // Non-Chrome desktop apps remain allowed in relaxed mode; Strict approvals
     // only controls approval ceremony for those apps.
@@ -208,7 +208,7 @@ try {
       name: "shell_exec",
       arguments: {
         command: "if false; then osascript -e 'tell application \"Slack\" to activate'; fi; printf should-not-run",
-        env: { MAC_DEV_BRIDGE_ALLOW_FOREGROUND_GUI: "1" },
+        env: { DARWINRELAY_ALLOW_FOREGROUND_GUI: "1" },
       },
     });
     assert.equal(selfBypassBlocked.result.isError, true);

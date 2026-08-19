@@ -1,42 +1,49 @@
 {
-  "name": "mac-developer-bridge",
-  "version": "0.5.2-desktop.1",
+  "name": "darwinrelay",
+  "version": "0.6.0",
   "type": "module",
-  "description": "Give ChatGPT terminal, browser, and native macOS desktop control through one local MCP bridge.",
+  "description": "Native macOS execution runtime for MCP agents: shell, PTY, background Chrome, and Accessibility-based desktop control.",
   "scripts": {
     "start": "node bridge.mjs",
     "start:http": "node mcp-http.mjs",
     "check": "node --check bridge.mjs && node --check mcp-http.mjs && node --check lib/chrome-extension-client.mjs && node --check lib/mac-ui-helper.mjs && node --check lib/mac-ui-cursor.mjs && node --check lib/advanced-browser.mjs && node --check scripts/chrome-native-host.mjs && node --check chrome-extension/service-worker.js && bash scripts/check-mac-ui-helper.sh && bash scripts/check-mac-ui-cursor.sh && bash -n scripts/desktop-doctor.sh && bash scripts/check-menubar.sh && bash scripts/check-desktop-fixture.sh",
-    "test": "node tests/smoke.mjs && node tests/integration.mjs && node tests/adversarial.mjs && node tests/http.mjs && node tests/oauth.mjs && node tests/pty.mjs && node tests/federation.mjs && node tests/chrome-background.mjs && bash tests/background-chrome-installer.sh && node tests/desktop-control.mjs && node tests/advanced-browser.mjs && bash tests/http-autostart.sh && bash tests/menubar-atomic-install.sh && bash tests/menubar-single-instance.sh && node tests/desktop-control-native.mjs && bash tests/installer-mock.sh"
+    "test": "npm run test:core && npm run test:desktop && npm run test:lifecycle",
+    "test:core": "node tests/smoke.mjs && node tests/integration.mjs && node tests/adversarial.mjs && node tests/http.mjs && node tests/oauth.mjs && node tests/pty.mjs && node tests/federation.mjs && node tests/chrome-background.mjs && node tests/advanced-browser.mjs",
+    "test:desktop": "node tests/desktop-control.mjs && node tests/desktop-control-native.mjs",
+    "test:lifecycle": "bash tests/background-chrome-installer.sh && bash tests/http-autostart.sh && bash tests/menubar-atomic-install.sh && bash tests/menubar-single-instance.sh && bash tests/installer-mock.sh",
+    "check:integrity": "bash scripts/check-checksums.sh",
+    "update:integrity": "bash scripts/update-checksums.sh"
   },
   "engines": {
     "node": ">=18"
   },
   "license": "MIT",
-  "author": "Alexander R\u00e5dahl Benz",
+  "author": "Sergey Borisov <44225844+dcierra@users.noreply.github.com>",
   "repository": {
     "type": "git",
-    "url": "https://github.com/dcierra/mac-developer-bridge-private.git"
+    "url": "https://github.com/dcierra/darwinrelay.git"
   },
-  "homepage": "https://github.com/dcierra/mac-developer-bridge-private#readme",
+  "homepage": "https://github.com/dcierra/darwinrelay#readme",
   "bugs": {
-    "url": "https://github.com/dcierra/mac-developer-bridge-private/issues"
+    "url": "https://github.com/dcierra/darwinrelay/issues"
   },
   "keywords": [
     "mcp",
     "mcp-server",
-    "chatgpt",
-    "codex",
     "macos",
+    "computer-use",
+    "accessibility",
+    "browser-automation",
     "terminal",
     "pty",
     "developer-tools",
-    "ai-agents"
+    "ai-agents",
+    "local-first"
   ],
-  "mcpName": "io.github.dcierra.mac-developer-bridge-private",
+  "mcpName": "io.github.dcierra.darwinrelay",
   "bin": {
-    "mac-developer-bridge": "./bridge.mjs",
-    "mac-developer-bridge-http": "./mcp-http.mjs"
+    "darwinrelay": "./bridge.mjs",
+    "darwinrelay-http": "./mcp-http.mjs"
   },
   "files": [
     "bridge.mjs",
@@ -53,7 +60,16 @@
     "README.md",
     "SECURITY.md",
     "DEPLOY.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "AGENTS.md",
+    "UPSTREAM.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "LICENSE",
+    "docs/",
+    "SHA256SUMS"
   ],
-  "private": true
+  "contributors": [
+    "Alexander Rådahl Benz <3107277+alexanderradahl@users.noreply.github.com>"
+  ]
 }

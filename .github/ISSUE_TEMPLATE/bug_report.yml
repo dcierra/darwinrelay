@@ -1,0 +1,40 @@
+name: Bug report
+description: Report a reproducible DarwinRelay defect
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not submit security vulnerabilities here; use GitHub private vulnerability reporting."
+  - type: input
+    id: version
+    attributes:
+      label: DarwinRelay version / commit
+      placeholder: "v0.6.0 or git SHA"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS and hardware
+      placeholder: "macOS 15.x, Apple Silicon"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Relevant diagnostics
+      description: Redact tokens, OAuth state, personal data and local secrets before pasting logs.
+      render: shell

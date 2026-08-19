@@ -11,7 +11,7 @@
 set -uo pipefail
 
 NODE_BIN="$(command -v node 2>/dev/null || true)"
-ZSH_BIN="${MAC_DEV_BRIDGE_SHELL:-/bin/zsh}"
+ZSH_BIN="${DARWINRELAY_SHELL:-/bin/zsh}"
 # A read of the user's own TCC database requires Full Disk Access.
 PROBE="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
 
@@ -70,7 +70,7 @@ if [[ -x "$ZSH_BIN" ]]; then
   # Bare redirection makes the shell itself perform the open(2). `head -c 1`
   # would measure /usr/bin/head, and zsh's `read -k` reads the terminal rather
   # than the redirected fd (and does not exist in bash, a supported value of
-  # MAC_DEV_BRIDGE_SHELL).
+  # DARWINRELAY_SHELL).
   "$ZSH_BIN" -c ': < "$1"' sh "$PROBE" >/dev/null 2>&1
   # Capture the status BEFORE any command substitution: the substitution in the
   # report call would otherwise overwrite $? with basename's status, which is
@@ -85,7 +85,7 @@ printf '\n%d granted, %d missing, %d absent\n' "$pass" "$fail" "$absent"
 
 if (( absent > 0 )); then
   printf '\nABSENT rows are not a permissions problem: the executable was not found.\n'
-  printf 'Install node, or point MAC_DEV_BRIDGE_SHELL at a real shell, then re-run.\n'
+  printf 'Install node, or point DARWINRELAY_SHELL at a real shell, then re-run.\n'
 fi
 
 if (( fail > 0 )); then
@@ -97,13 +97,13 @@ To grant it (requires your password; no scripted path exists):
 
 On the Cloudflare/HTTP transport, add the APP BUNDLE, not the binaries:
 
-  /Applications/MacDevBridge.app
+  /Applications/DarwinRelay.app
 
 Measured on this machine: granting Full Disk Access to the bundle alone produced
 GRANTED for both node and zsh, with no separate TCC entries for either, because
 macOS attributes access to the responsible process and the chain is
 
-  MacDevBridge.app -> node -> zsh
+  DarwinRelay.app -> node -> zsh
 
 The control that makes this conclusive is that Terminal was NOT granted access, yet
 the check still passed — so the grant was genuinely inherited from the app rather
@@ -129,12 +129,12 @@ front end (mcp-http.mjs); for the OpenAI Tunnel transport it is tunnel-client:
 
   Tunnel transport (a LaunchAgent exists):
     launchctl kickstart -k "gui/$(id -u)/<the label you installed>"
-  Cloudflare/HTTP transport (menu app or optional local.mac-developer-bridge.http LaunchAgent):
-    use Stop then Start in the MacDevBridge menu bar app
+  Cloudflare/HTTP transport (menu app or optional io.github.dcierra.darwinrelay.http LaunchAgent):
+    use Stop then Start in the DarwinRelay menu bar app
 
 Listing what is actually loaded:
 
-  launchctl list | grep mac-developer-bridge
+  launchctl list | grep darwinrelay
 TXT
 fi
 

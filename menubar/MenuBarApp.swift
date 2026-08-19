@@ -1,4 +1,4 @@
-// Menu bar controller for Mac Developer Bridge (Cloudflare/HTTP transport).
+// Menu bar controller for DarwinRelay (Cloudflare/HTTP transport).
 //
 // It owns the lifecycle of the two processes the transport needs — mcp-http.mjs
 // and `cloudflared tunnel` — and surfaces the three things you actually need:
@@ -57,7 +57,7 @@ struct Paths {
         func hasBridge(_ dir: String) -> Bool { fm.fileExists(atPath: dir + "/mcp-http.mjs") }
 
         // 1. Explicit override, for development.
-        if let override = ProcessInfo.processInfo.environment["MAC_DEV_BRIDGE_HOME"],
+        if let override = ProcessInfo.processInfo.environment["DARWINRELAY_HOME"],
            !override.isEmpty, hasBridge(override) {
             return override
         }
@@ -65,7 +65,7 @@ struct Paths {
         let sibling = (Bundle.main.bundlePath as NSString).deletingLastPathComponent
         if hasBridge(sibling) { return sibling }
         // 3. The path baked in at build time, so an installed copy still finds it.
-        if let baked = Bundle.main.object(forInfoDictionaryKey: "MDBPackageDirectory") as? String,
+        if let baked = Bundle.main.object(forInfoDictionaryKey: "DarwinRelayPackageDirectory") as? String,
            !baked.isEmpty, hasBridge(baked) {
             return baked
         }
@@ -79,14 +79,14 @@ struct Paths {
 
     static let dataDir: String = {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return ProcessInfo.processInfo.environment["MAC_DEV_BRIDGE_DATA_DIR"]
-            ?? home + "/Library/Application Support/MacDeveloperBridge"
+        return ProcessInfo.processInfo.environment["DARWINRELAY_DATA_DIR"]
+            ?? home + "/Library/Application Support/DarwinRelay"
     }()
 
     static let logDir: String = {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return ProcessInfo.processInfo.environment["MAC_DEV_BRIDGE_LOG_DIR"]
-            ?? home + "/Library/Logs/MacDeveloperBridge"
+        return ProcessInfo.processInfo.environment["DARWINRELAY_LOG_DIR"]
+            ?? home + "/Library/Logs/DarwinRelay"
     }()
 
     static var tokenFile: String { dataDir + "/http-token" }
@@ -112,14 +112,14 @@ final class MenuBarInstanceLock {
         do {
             try fm.createDirectory(atPath: Paths.dataDir, withIntermediateDirectories: true)
         } catch {
-            NSLog("MacDevBridge: cannot create data directory for instance lock: %@", error.localizedDescription)
+            NSLog("DarwinRelay: cannot create data directory for instance lock: %@", error.localizedDescription)
             return nil
         }
         let lock = MenuBarInstanceLock()
         let path = Paths.dataDir + "/menubar.lock"
         lock.fd = Darwin.open(path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
         guard lock.fd >= 0 else {
-            NSLog("MacDevBridge: cannot open instance lock %@ (errno=%d)", path, errno)
+            NSLog("DarwinRelay: cannot open instance lock %@ (errno=%d)", path, errno)
             return nil
         }
         guard flock(lock.fd, LOCK_EX | LOCK_NB) == 0 else {
@@ -203,7 +203,7 @@ struct NamedTunnel {
         return nil
     }
 }
-let httpPort = Int(ProcessInfo.processInfo.environment["MAC_DEV_BRIDGE_HTTP_PORT"] ?? "") ?? 8787
+let httpPort = Int(ProcessInfo.processInfo.environment["DARWINRELAY_HTTP_PORT"] ?? "") ?? 8787
 
 // MARK: - Token
 
@@ -231,7 +231,7 @@ enum TokenStore {
         }
         var bytes = [UInt8](repeating: 0, count: 32)
         guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
-            throw NSError(domain: "MacDevBridge", code: 1,
+            throw NSError(domain: "DarwinRelay", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Could not generate a token"])
         }
         let token = bytes.map { String(format: "%02x", $0) }.joined()
@@ -241,7 +241,7 @@ enum TokenStore {
         try? fm.removeItem(atPath: Paths.tokenFile)
         fm.createFile(atPath: Paths.tokenFile, contents: nil, attributes: [.posixPermissions: 0o600])
         guard let handle = FileHandle(forWritingAtPath: Paths.tokenFile) else {
-            throw NSError(domain: "MacDevBridge", code: 2,
+            throw NSError(domain: "DarwinRelay", code: 2,
                           userInfo: [NSLocalizedDescriptionKey: "Could not open the token file for writing"])
         }
         handle.write(Data(token.utf8))
@@ -290,7 +290,7 @@ enum ClientIdStore {
         }
         var bytes = [UInt8](repeating: 0, count: 8)
         _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        let id = "mdb-" + bytes.map { String(format: "%02x", $0) }.joined()
+        let id = "darwinrelay-" + bytes.map { String(format: "%02x", $0) }.joined()
         try? id.write(toFile: Paths.clientIdFile, atomically: true, encoding: .utf8)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: Paths.clientIdFile)
         return id
@@ -389,7 +389,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard Self.looksLikeFrontEnd(pid: pid, commandLine: command) else {
             // Do NOT delete the record here. A false negative used to erase the only
             // handle on a live front end; keeping it lets the next launch retry.
-            NSLog("MacDevBridge: pidfile %d does not look like our front end; leaving the record alone", pid)
+            NSLog("DarwinRelay: pidfile %d does not look like our front end; leaving the record alone", pid)
             return
         }
 
@@ -446,7 +446,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let lock = MenuBarInstanceLock.acquire() else {
-            NSLog("MacDevBridge: another menu-bar instance already owns the runtime; exiting without touching shared state")
+            NSLog("DarwinRelay: another menu-bar instance already owns the runtime; exiting without touching shared state")
             DispatchQueue.main.async { NSApp.terminate(nil) }
             return
         }
@@ -548,7 +548,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         strictApprovalsItem.target = self
         strictApprovalsItem.action = #selector(toggleStrictApprovals)
-        strictApprovalsItem.toolTip = "Off by default: MDB can use the signed-in Chrome profile and foreground desktop tools without per-site/per-app approval files. Turn this on to require short-lived scoped approvals."
+        strictApprovalsItem.toolTip = "Off by default: DarwinRelay can use the signed-in Chrome profile and foreground desktop tools without per-site/per-app approval files. Turn this on to require short-lived scoped approvals."
         menu.addItem(strictApprovalsItem)
 
         desktopPermissionsItem.target = self
@@ -601,9 +601,9 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
             statusItem.button?.image = image
             statusItem.button?.title = ""
         } else {
-            statusItem.button?.title = "MDB"
+            statusItem.button?.title = "DR"
         }
-        statusItem.button?.toolTip = "Mac Developer Bridge — \(description)"
+        statusItem.button?.toolTip = "DarwinRelay — \(description)"
 
         let mode = namedTunnel.map { "stable: \($0.hostname)" } ?? "quick tunnel — URL changes every start"
         tunnelModeMenuItem.title = "Tunnel: \(mode)"
@@ -652,7 +652,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if enabled {
                 notify("Strict approvals enabled", "Websites and foreground desktop mutations now require scoped short-lived approvals.")
             } else {
-                notify("Relaxed access enabled", "No per-site/per-app approval commands are required. Chrome still routes through the background MDB tab group.")
+                notify("Relaxed access enabled", "No per-site/per-app approval commands are required. Chrome still routes through the background DarwinRelay tab group.")
             }
         } catch {
             notify("Could not update approval mode", error.localizedDescription)
@@ -935,19 +935,19 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// does not need it, and set for the front end so the OAuth issuer is pinned.
     private func childEnvironment(publicURL: String?) -> [String: String] {
         var env = ProcessInfo.processInfo.environment
-        env["MAC_DEV_BRIDGE_HTTP_TOKEN_FILE"] = Paths.tokenFile
-        env["MAC_DEV_BRIDGE_HTTP_PORT"] = String(httpPort)
-        env["MAC_DEV_BRIDGE_DATA_DIR"] = Paths.dataDir
-        env["MAC_DEV_BRIDGE_LOG_DIR"] = Paths.logDir
-        env["MAC_DEV_BRIDGE_UNLOCK_FILE"] = Paths.unlockFile
-        env["MAC_DEV_BRIDGE_OAUTH_CLIENT_ID"] = clientId
-        env["MAC_DEV_BRIDGE_UI_HELPER"] = Paths.uiHelper
-        env["MAC_DEV_BRIDGE_UI_CURSOR_HELPER"] = Paths.uiCursorHelper
-        if let publicURL { env["MAC_DEV_BRIDGE_PUBLIC_URL"] = publicURL }
+        env["DARWINRELAY_HTTP_TOKEN_FILE"] = Paths.tokenFile
+        env["DARWINRELAY_HTTP_PORT"] = String(httpPort)
+        env["DARWINRELAY_DATA_DIR"] = Paths.dataDir
+        env["DARWINRELAY_LOG_DIR"] = Paths.logDir
+        env["DARWINRELAY_UNLOCK_FILE"] = Paths.unlockFile
+        env["DARWINRELAY_OAUTH_CLIENT_ID"] = clientId
+        env["DARWINRELAY_UI_HELPER"] = Paths.uiHelper
+        env["DARWINRELAY_UI_CURSOR_HELPER"] = Paths.uiCursorHelper
+        if let publicURL { env["DARWINRELAY_PUBLIC_URL"] = publicURL }
         // Never inherit the env-var form of the acknowledgement. bridge.mjs treats it as
         // a standing unlock, so a bridge started with it set cannot be revoked by
         // removing the unlock file — which would void this app's entire Stop contract.
-        env.removeValue(forKey: "MAC_DEV_BRIDGE_FULL_ACCESS_ACK")
+        env.removeValue(forKey: "DARWINRELAY_FULL_ACCESS_ACK")
         // A GUI-launched app has a minimal PATH; give children the login one so
         // shell_exec behaves the same as it does from a terminal.
         if let shellPath = loginShellPATH() { env["PATH"] = shellPath }
@@ -1100,7 +1100,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// `tail -f …/mcp-http.mjs` and group-killed it. Requiring the absolute path broke
     /// the documented `node mcp-http.mjs` relative launch, and then deleted the pidfile
     /// on that false negative — destroying the only handle on a live front end. Both
-    /// tokenized on spaces, which fails for `mac-developer-bridge (1)`.
+    /// tokenized on spaces, which fails for `darwinrelay (1)`.
     ///
     /// Checking the executable via `ps -o comm=` avoids argv parsing entirely, and
     /// "first .mjs" distinguishes the script node RUNS from one merely passed to it
@@ -1118,7 +1118,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
     static func isRunningScript(path expected: String, commandLine: String) -> Bool {
         // Compare against the known absolute path rather than tokenizing on spaces.
         // Splitting on " " silently failed for any install directory containing one —
-        // `mac-developer-bridge (1)` from a second download, or anything under
+        // `darwinrelay (1)` from a second download, or anything under
         // "Application Support" — so an orphaned front end there was never reclaimed.
         for flag in [" --check ", " -e ", " --eval ", " -p ", " --print ", " -c "] where commandLine.contains(flag) {
             return false   // inspecting the file, not running it

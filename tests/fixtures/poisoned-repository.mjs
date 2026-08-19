@@ -91,7 +91,7 @@ export async function createPoisonedRepository(parentDirectory) {
     repository,
     ".fixture/expected.json",
     `${JSON.stringify({
-      format: "mac-developer-bridge-poisoned-repository/v1",
+      format: "darwinrelay-poisoned-repository/v1",
       payloads,
       expected_bridge_behavior: [
         "return model-visible content verbatim while the latch is armed",

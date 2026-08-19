@@ -1,0 +1,10 @@
+title = "DarwinRelay gitleaks configuration"
+
+[allowlist]
+description = "Known public-key and test-fixture false positives"
+paths = [
+  '''chrome-extension/manifest\.json''',
+]
+regexes = [
+  '''correct-horse-battery-staple-9f2c''',
+]

@@ -14,10 +14,11 @@ if (process.platform !== "darwin") {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const bridgePath = path.resolve(here, "..", "bridge.mjs");
-const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mdb-advanced-browser-test-"));
+const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "dr-adv-"));
 const dataDir = path.join(tempRoot, "data");
 const logDir = path.join(tempRoot, "logs");
 const socketPath = path.join(tempRoot, "browser-harness.sock");
+assert.ok(Buffer.byteLength(socketPath) < 100, `Unix-domain socket path must stay short on macOS: ${socketPath}`);
 const settingsFile = path.join(dataDir, "settings.json");
 const auditFile = path.join(logDir, "audit.jsonl");
 await fs.mkdir(dataDir, { recursive: true });
@@ -55,14 +56,14 @@ const child = spawn(process.execPath, [bridgePath], {
   stdio: ["pipe", "pipe", "pipe"],
   env: {
     ...process.env,
-    MAC_DEV_BRIDGE_DATA_DIR: dataDir,
-    MAC_DEV_BRIDGE_LOG_DIR: logDir,
-    MAC_DEV_BRIDGE_AUDIT_MODE: "full",
-    MAC_DEV_BRIDGE_AUDIT_LOG: auditFile,
-    MAC_DEV_BRIDGE_FULL_ACCESS_ACK: "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS",
-    MAC_DEV_BRIDGE_ADVANCED_BROWSER: "1",
-    MAC_DEV_BRIDGE_ADVANCED_BROWSER_SOCKET: socketPath,
-    MAC_DEV_BRIDGE_ADVANCED_BROWSER_NAME: "test",
+    DARWINRELAY_DATA_DIR: dataDir,
+    DARWINRELAY_LOG_DIR: logDir,
+    DARWINRELAY_AUDIT_MODE: "full",
+    DARWINRELAY_AUDIT_LOG: auditFile,
+    DARWINRELAY_FULL_ACCESS_ACK: "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS",
+    DARWINRELAY_ADVANCED_BROWSER: "1",
+    DARWINRELAY_ADVANCED_BROWSER_SOCKET: socketPath,
+    DARWINRELAY_ADVANCED_BROWSER_NAME: "test",
   },
 });
 const rl = readline.createInterface({ input: child.stdout });
