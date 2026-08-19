@@ -62,9 +62,19 @@ does not prove the unlock file is correct. Confirm with a real call after
 connecting the plugin.
 
 Verify with `scripts/doctor.sh`, which reports the HTTP front end's state and the
-Full Disk Access check. There is no LaunchAgent for this transport yet, so
-`mcp-http.mjs` and `cloudflared` do not survive a reboot and nothing restarts
-them after a crash.
+Full Disk Access check. For persistence, build/install the menu app and install
+its per-user LaunchAgent:
+
+```bash
+./menubar/build.sh
+./scripts/install-http-autostart.sh
+```
+
+If the menu app is already running, the installer writes the LaunchAgent for the
+next login without loading a duplicate instance. Once launchd owns it, it starts
+at login and restarts after abnormal exits; normal Quit is not immediately
+respawned. The menu app continues to supervise `mcp-http.mjs` and `cloudflared` as
+a pair.
 
 To stop everything, from this directory:
 
@@ -163,7 +173,7 @@ Do not invoke a Codex model or OpenAI API from shell.
 # Tunnel transport (install.sh has run):
 "$HOME/.local/share/mac-developer-bridge/scripts/disable.sh"
 
-# HTTP transport — no install dir exists, run it from the package:
+# HTTP transport — run from the package; this also boots out HTTP autostart if loaded:
 ./scripts/disable.sh
 ```
 
@@ -183,12 +193,13 @@ tool call and exits 78 when it is gone, so `rm` alone refuses the next call. An
 in-flight `shell_exec` is killed rather than left running, and detached
 `shell_start` jobs still outlive the bridge until `disable.sh` reclaims them.
 
-`disable.sh` stops the front end (by pidfile), any `bridge.mjs` processes, and
-detached job process groups, escalates to `SIGKILL`, then re-verifies the same
-targets it signalled and exits non-zero if any survive — or if the unlock file
-could not be removed, or `launchctl` could not be queried. It does not stop
-`cloudflared`; if it warns that cloudflared is still running, the hostname may
-still resolve:
+`disable.sh` first boots out either MDB LaunchAgent (Secure Tunnel or
+HTTP/Cloudflare autostart), then stops the front end (by pidfile), any `bridge.mjs`
+processes, and detached job process groups. It escalates to `SIGKILL`, re-verifies
+the same targets, and exits non-zero if any survive — or if the unlock file could
+not be removed, or `launchctl` could not be queried. It does not kill an unrelated
+or already-detached `cloudflared`; if it warns that one is still running, the
+hostname may still resolve:
 
 ```bash
 pkill -f 'cloudflared tunnel'

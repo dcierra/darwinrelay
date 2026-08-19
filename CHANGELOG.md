@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### 0.5.2 release/deployment hardening
+
+- Added zero-downtime signed menu-app deployment with same-filesystem atomic replacement, designated-requirement checks, a retained rollback bundle, and explicit rollback tooling; current `mcp-http`/Cloudflare/menu PIDs need not restart for helper updates.
+- Added HTTP/Cloudflare per-user autostart through `local.mac-developer-bridge.http`: login startup, abnormal-exit restart, duplicate-instance avoidance when installed during a live session, and kill-switch/uninstall integration.
+- Added an opt-in self-hosted Apple Silicon native desktop E2E workflow so mutable AppKit/CGEvent behavior can be exercised on a real logged-in Mac instead of being pretended reliable on GitHub-hosted GUI sessions.
+- Switched private-line README/package identifiers to `dcierra/mac-developer-bridge-private`, derived the app bundle version from `package.json`, and bumped the background Chrome extension to 0.2.4.
+
 ### Native desktop computer control (private line)
 
 - 0.5.1 signing/TCC hardening: `MacDevBridge.app`, `MacUIHelper`, and `MacUICursorOverlay` now share one stable Apple code-signing identity; helpers are embedded under `Contents/Helpers`, the bridge is explicitly routed to those nested binaries, menu permission indicators query the real helper, and the helper can request its own Accessibility/Screen/Post Events permissions. Permission state is cached and refreshed on menu open/request completion instead of spawning the helper on every two-second transport health render.

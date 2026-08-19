@@ -17,9 +17,10 @@ set -uo pipefail
 #      group is reclaimable from here).
 #   5. The background-Chrome native messaging host, which Chrome owns rather
 #      than bridge.mjs and can otherwise survive the MCP processes.
-#   6. The LaunchAgent, on the Tunnel transport (the HTTP transport has none).
+#   6. Any product LaunchAgent: OpenAI Tunnel or HTTP/Cloudflare autostart.
 
 LABEL="com.openai.mac-developer-bridge-tunnel"
+HTTP_LABEL="local.mac-developer-bridge.http"
 DOMAIN="gui/$(id -u)"
 DATA_DIR="${MAC_DEV_BRIDGE_DATA_DIR:-$HOME/Library/Application Support/MacDeveloperBridge}"
 UNLOCK_FILE="${MAC_DEV_BRIDGE_UNLOCK_FILE:-$DATA_DIR/FULL_ACCESS_ENABLED}"
@@ -233,33 +234,33 @@ if [[ -d "$BACKGROUND_CHROME_GRANT_DIR" ]]; then
   fi
 fi
 
-# --- LaunchAgent ------------------------------------------------------------
+# --- LaunchAgents -----------------------------------------------------------
 if [[ -n "$LAUNCHCTL_BIN" && -x "$LAUNCHCTL_BIN" ]]; then
-  launchctl_out="$("$LAUNCHCTL_BIN" print "$DOMAIN/$LABEL" 2>&1)"
-  launchctl_rc=$?
-  if (( launchctl_rc == 0 )); then
-    if "$LAUNCHCTL_BIN" bootout "$DOMAIN/$LABEL" >/dev/null 2>&1; then
-      printf 'Stopped LaunchAgent: %s\n' "$LABEL"
+  for launch_label in "$LABEL" "$HTTP_LABEL"; do
+    launchctl_out="$("$LAUNCHCTL_BIN" print "$DOMAIN/$launch_label" 2>&1)"
+    launchctl_rc=$?
+    if (( launchctl_rc == 0 )); then
+      if "$LAUNCHCTL_BIN" bootout "$DOMAIN/$launch_label" >/dev/null 2>&1; then
+        printf 'Stopped LaunchAgent: %s\n' "$launch_label"
+      else
+        printf 'FAILED to boot out LaunchAgent %s\n' "$launch_label"
+        still_running=1
+      fi
+      did_something=1
+      if "$LAUNCHCTL_BIN" print "$DOMAIN/$launch_label" >/dev/null 2>&1; then
+        printf 'WARNING: LaunchAgent %s is STILL loaded; launchd may relaunch it.\n' "$launch_label"
+        still_running=1
+      fi
+    elif [[ "$launchctl_out" == *"Could not find service"* || "$launchctl_out" == *"not find"* ]]; then
+      printf 'No LaunchAgent loaded: %s\n' "$launch_label"
     else
-      printf 'FAILED to boot out LaunchAgent %s\n' "$LABEL"
+      # Commonly a non-GUI session: the gui/<uid> domain is unreachable over SSH,
+      # so we cannot conclude the agent is absent.
+      printf 'Could not query LaunchAgent %s in domain %s. Cannot confirm it is stopped:\n' "$launch_label" "$DOMAIN"
+      printf '  %s\n' "$launchctl_out"
       still_running=1
     fi
-    did_something=1
-    # KeepAlive + ThrottleInterval means launchd can relaunch the chain up to
-    # 10s later, after the checks below would otherwise have printed a verdict.
-    if "$LAUNCHCTL_BIN" print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
-      printf 'WARNING: LaunchAgent is STILL loaded; launchd may relaunch it (KeepAlive).\n'
-      still_running=1
-    fi
-  elif [[ "$launchctl_out" == *"Could not find service"* || "$launchctl_out" == *"not find"* ]]; then
-    printf 'No LaunchAgent loaded (expected on the Cloudflare/HTTP transport).\n'
-  else
-    # Commonly a non-GUI session: the gui/<uid> domain is unreachable over SSH,
-    # so we cannot conclude the agent is absent.
-    printf 'Could not query the LaunchAgent domain (%s). Cannot confirm it is stopped:\n' "$DOMAIN"
-    printf '  %s\n' "$launchctl_out"
-    still_running=1
-  fi
+  done
 fi
 
 # --- serving processes ------------------------------------------------------

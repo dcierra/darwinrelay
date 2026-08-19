@@ -11,9 +11,12 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 PACKAGE_DIR="$(cd "$HERE/.." && pwd -P)"
-APP="$PACKAGE_DIR/MacDevBridge.app"
+APP="${MAC_DEV_BRIDGE_APP_OUTPUT:-$PACKAGE_DIR/MacDevBridge.app}"
 NAME="MacDevBridge"
 INSTALL_APP="${MAC_DEV_BRIDGE_INSTALL_APP:-1}"
+INSTALL_DIR_OVERRIDE="${MAC_DEV_BRIDGE_APP_INSTALL_DIR:-}"
+PACKAGE_VERSION="$(node -p 'require(process.argv[1]).version' "$PACKAGE_DIR/package.json")"
+BUNDLE_VERSION="${PACKAGE_VERSION%%-*}"
 source "$PACKAGE_DIR/scripts/codesign-runtime.sh"
 SIGN_ID="$(mdb_codesign_identity)"
 if [[ -n "$SIGN_ID" ]]; then export MAC_DEV_BRIDGE_SIGN_IDENTITY="$SIGN_ID"; fi
@@ -54,8 +57,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>$NAME</string>
   <key>CFBundleDisplayName</key><string>Mac Developer Bridge</string>
   <key>CFBundleIdentifier</key><string>local.mac-developer-bridge.menubar</string>
-  <key>CFBundleVersion</key><string>0.5.1</string>
-  <key>CFBundleShortVersionString</key><string>0.5.1</string>
+  <key>CFBundleVersion</key><string>$BUNDLE_VERSION</string>
+  <key>CFBundleShortVersionString</key><string>$BUNDLE_VERSION</string>
   <key>CFBundleExecutable</key><string>$NAME</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
@@ -88,21 +91,92 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null
 mdb_sign_runtime "$APP" "local.mac-developer-bridge.menubar" "$SIGN_ID"
 codesign --verify --deep --strict "$APP" >/dev/null
 
-# Install a copy where the user will actually look for it. Launchpad and Spotlight
-# do not surface apps living in ~/Downloads, which is where this one was stranded.
+# Install a copy where the user will actually look for it. Installation is a
+# same-filesystem rename, not rm+cp: a running /Applications instance keeps its
+# existing executable alive while future helper launches resolve through the new
+# bundle. One rollback bundle is retained beside the installed app.
+designated_requirement() {
+  codesign -dr - "$1" 2>&1 | sed -n 's/^designated => //p'
+}
+
+same_runtime_identity() {
+  local current="$1" candidate="$2" label="$3"
+  [[ -e "$current" && -e "$candidate" ]] || return 0
+  local current_req candidate_req
+  current_req="$(designated_requirement "$current")"
+  candidate_req="$(designated_requirement "$candidate")"
+  if [[ -n "$current_req" && "$current_req" == "$candidate_req" ]]; then return 0; fi
+  if [[ "${MAC_DEV_BRIDGE_ALLOW_SIGNING_CHANGE:-0}" == "1" ]]; then
+    echo "warning: allowing signing-identity change for $label" >&2
+    return 0
+  fi
+  echo "error: refusing to replace $label because its designated code requirement changed" >&2
+  echo "  current:   ${current_req:-<none>}" >&2
+  echo "  candidate: ${candidate_req:-<none>}" >&2
+  echo "Set MAC_DEV_BRIDGE_ALLOW_SIGNING_CHANGE=1 only when you intentionally want new TCC identities." >&2
+  return 1
+}
+
+install_atomically() {
+  local dest="$1"
+  local target="$dest/$NAME.app"
+  local staged="$dest/.${NAME}.app.new.$$"
+  local rollback="$dest/.${NAME}.app.rollback"
+  mkdir -p "$dest" 2>/dev/null || return 1
+  rm -rf "$staged"
+  cp -R "$APP" "$staged" 2>/dev/null || return 1
+  codesign --verify --deep --strict "$staged" >/dev/null 2>&1 || {
+    echo "warning: staged app signature verification failed: $staged" >&2
+    rm -rf "$staged"
+    return 1
+  }
+
+  if [[ -d "$target" ]]; then
+    same_runtime_identity "$target" "$staged" "menu app" || { rm -rf "$staged"; return 1; }
+    same_runtime_identity "$target/Contents/Helpers/MacUIHelper" "$staged/Contents/Helpers/MacUIHelper" "MacUIHelper" || { rm -rf "$staged"; return 1; }
+    same_runtime_identity "$target/Contents/Helpers/MacUICursorOverlay" "$staged/Contents/Helpers/MacUICursorOverlay" "MacUICursorOverlay" || { rm -rf "$staged"; return 1; }
+    if [[ -d "$rollback" ]]; then
+      for live_file in "$rollback/Contents/MacOS/MacDevBridge" "$rollback/Contents/Helpers/MacUICursorOverlay"; do
+        if [[ -e "$live_file" ]] && /usr/sbin/lsof -t "$live_file" 2>/dev/null | grep -q .; then
+          echo "error: refusing another hot swap while a process is still executing from $rollback" >&2
+          echo "Restart MacDevBridge normally before replacing the retained rollback bundle." >&2
+          rm -rf "$staged"
+          return 1
+        fi
+      done
+      rm -rf "$rollback"
+    fi
+    mv "$target" "$rollback" || { rm -rf "$staged"; return 1; }
+  fi
+
+  if ! mv "$staged" "$target"; then
+    [[ -d "$rollback" && ! -e "$target" ]] && mv "$rollback" "$target" || true
+    return 1
+  fi
+  if ! codesign --verify --deep --strict "$target" >/dev/null 2>&1; then
+    echo "warning: installed app failed signature verification; rolling back" >&2
+    rm -rf "$target"
+    [[ -d "$rollback" ]] && mv "$rollback" "$target"
+    return 1
+  fi
+  printf '%s\n' "$target"
+}
+
 INSTALLED=""
 if [[ "$INSTALL_APP" != "0" ]]; then
-  for dest in /Applications "$HOME/Applications"; do
-    [ -d "$dest" ] || mkdir -p "$dest" 2>/dev/null || continue
-    if rm -rf "$dest/$NAME.app" 2>/dev/null && cp -R "$APP" "$dest/" 2>/dev/null; then
-      # Preserve the signature created above. Re-signing the installed copy ad-hoc
-      # changes its designated requirement/cdhash and invalidates TCC grants.
-      codesign --verify --deep --strict "$dest/$NAME.app" >/dev/null 2>&1 || {
-        echo "warning: installed app signature verification failed: $dest/$NAME.app" >&2
-        continue
-      }
-      INSTALLED="$dest/$NAME.app"
+  if [[ -n "$INSTALL_DIR_OVERRIDE" ]]; then
+    install_dirs=("$INSTALL_DIR_OVERRIDE")
+  else
+    install_dirs=(/Applications "$HOME/Applications")
+  fi
+  for dest in "${install_dirs[@]}"; do
+    target_exists=0
+    [[ -d "$dest/$NAME.app" ]] && target_exists=1
+    if INSTALLED="$(install_atomically "$dest")"; then
       break
+    elif (( target_exists == 1 )); then
+      echo "error: existing installation at $dest/$NAME.app was left unchanged; refusing fallback to another Applications directory" >&2
+      exit 1
     fi
   done
 fi

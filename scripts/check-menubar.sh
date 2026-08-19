@@ -8,3 +8,13 @@ xcrun swiftc -typecheck \
   -framework ApplicationServices \
   -framework CoreGraphics \
   "$ROOT/menubar/MenuBarApp.swift"
+
+for script in \
+  "$ROOT/menubar/build.sh" \
+  "$ROOT/scripts/deploy-menubar-update.sh" \
+  "$ROOT/scripts/rollback-menubar-update.sh" \
+  "$ROOT/scripts/install-http-autostart.sh" \
+  "$ROOT/scripts/uninstall-http-autostart.sh"; do
+  bash -n "$script"
+done
+plutil -lint "$ROOT/launchd/local.mac-developer-bridge.http.plist.template" >/dev/null

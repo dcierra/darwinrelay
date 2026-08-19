@@ -2,7 +2,7 @@
 
 ### Give ChatGPT a real terminal on your Mac.
 
-[![CI](https://github.com/alexanderradahl/mac-developer-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/alexanderradahl/mac-developer-bridge/actions/workflows/ci.yml)
+[![CI](https://github.com/dcierra/mac-developer-bridge-private/actions/workflows/ci.yml/badge.svg)](https://github.com/dcierra/mac-developer-bridge-private/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Mac Developer Bridge turns a ChatGPT conversation into the reasoning layer for your actual Mac. It can run shell commands, edit files, start interactive terminal sessions, manage long-running jobs, read stored Codex threads without starting another Codex model turn, and optionally operate a configured Chrome profile **in the background without stealing focus**.
@@ -49,7 +49,7 @@ This is intentionally different from a local coding agent. There is no second re
 For a personal ChatGPT account, the menu-bar app is the easiest path. You need macOS, Node.js 18+, `cloudflared`, a hostname/tunnel, and ChatGPT Developer mode.
 
 ```bash
-git clone https://github.com/alexanderradahl/mac-developer-bridge.git
+git clone git@github.com:dcierra/mac-developer-bridge-private.git
 cd mac-developer-bridge
 ./menubar/build.sh
 open /Applications/MacDevBridge.app
@@ -61,7 +61,7 @@ Workspace users who have access to OpenAI Secure MCP Tunnel can use `install.sh`
 
 Want to see what to ask it to do? Start with the [copy-paste workflows](examples/README.md).
 
-If this is useful, star the repo so other developers can find it. If you build something interesting with it, share the exact workflow in [What are you making ChatGPT do on your Mac?](https://github.com/alexanderradahl/mac-developer-bridge/discussions/3).
+This repository is the private `dcierra` product line. Its public upstream remains available through the configured `upstream` Git remote for selective synchronization.
 
 This is an independent open-source project and is not an official OpenAI or Cloudflare product. OpenAI, ChatGPT, Codex, and Cloudflare are trademarks of their respective owners.
 
@@ -397,11 +397,14 @@ that fronts unrestricted shell access, with a single bearer token as the entire
 barrier. Rotate the token if it is ever disclosed, and consider Cloudflare
 Access in front of it for a second factor.
 
-Not yet automated for this transport: `install.sh` requires `tunnel-client` and
-rejects a missing `tunnel_...` id, so it cannot install the HTTP path, and there
-is no LaunchAgent — nothing restarts `mcp-http.mjs` or `cloudflared` after a
-reboot or a crash. `scripts/doctor.sh` does cover this transport.
-`uninstall.sh` removes the files but does not stop a running front end.
+`install.sh` remains specific to OpenAI Secure MCP Tunnel, but the HTTP/Cloudflare
+path now has its own persistence layer. After building/installing the menu app, run
+`scripts/install-http-autostart.sh`. It writes a per-user LaunchAgent that starts
+`MacDevBridge.app --start` at login and restarts it after an abnormal exit. When a
+MacDevBridge instance is already running, the installer deliberately does **not**
+load a second copy in the current session; the LaunchAgent takes ownership on the
+next login. `scripts/uninstall-http-autostart.sh` removes it, and the global
+`scripts/disable.sh` boots out either MDB LaunchAgent before containment checks.
 
 ## Connecting to ChatGPT
 
@@ -459,15 +462,21 @@ transport needs and surfaces the three things you actually use: the public URL,
 the bearer token, and whether the endpoint is answering.
 
 ```bash
-./menubar/build.sh          # also installs a copy to /Applications
+./menubar/build.sh          # signed build + atomic install to /Applications
 open /Applications/MacDevBridge.app
+# Optional persistence across login/reboot:
+./scripts/install-http-autostart.sh
 ```
 
 The build installs to `/Applications` (falling back to `~/Applications`) because
-Launchpad and Spotlight do not surface apps living in `~/Downloads`. The bundle
-locates `mcp-http.mjs` via `MAC_DEV_BRIDGE_HOME`, then a package next to itself,
-then a path baked into `Info.plist` at build time — so the installed copy still
-finds the package.
+Launchpad and Spotlight do not surface apps living in `~/Downloads`. Replacement
+is staged and moved into place atomically; a running menu app/front end is not
+killed, one `.MacDevBridge.app.rollback` bundle is retained, and the installer
+refuses a changed designated signing requirement unless explicitly overridden.
+For production updates use `scripts/deploy-menubar-update.sh`; rollback is
+`scripts/rollback-menubar-update.sh`. The bundle locates `mcp-http.mjs` via
+`MAC_DEV_BRIDGE_HOME`, then a package next to itself, then a path baked into
+`Info.plist` at build time.
 
 The menu gives you: current status, the tunnel mode, **Copy Server URL**, **Copy
 OAuth Client ID**, **Copy ChatGPT Setup** (the whole dialog filled in, in order),
@@ -505,11 +514,13 @@ Why it is worth using over the raw commands:
 - Children inherit the **login shell** `PATH`, so `shell_exec` behaves the same as
   it does in a terminal (a GUI-launched app otherwise has no nvm or Homebrew).
 
-The app is ad-hoc signed and not notarized. It locates `mcp-http.mjs` via
+The build prefers a real local Apple code-signing identity and signs the menu app,
+`MacUIHelper`, and `MacUICursorOverlay` with stable designated requirements; CI or
+machines without a certificate fall back to ad-hoc signing with an explicit TCC
+warning. The app is not notarized. It locates `mcp-http.mjs` via
 `MAC_DEV_BRIDGE_HOME`, then a package next to the bundle, then a path baked into
-`Info.plist` at build time — so the `/Applications` copy works with the package
-left where it is. Rebuild after moving the package so the baked path stays correct.
-`MAC_DEV_BRIDGE_HOME`.
+`Info.plist` at build time. Rebuild after moving the package so that path stays
+correct.
 
 It does not replace `scripts/disable.sh`: detached `shell_start` jobs outlive the
 front end by design, and only that script reclaims them from the job registry.
@@ -544,7 +555,7 @@ Developer-mode availability is controlled by the account rollout and workspace p
 Clone the repository (or download a release/archive) and open Terminal in its folder:
 
 ```bash
-git clone https://github.com/alexanderradahl/mac-developer-bridge.git
+git clone git@github.com:dcierra/mac-developer-bridge-private.git
 cd mac-developer-bridge
 ```
 
@@ -660,16 +671,14 @@ HTTP transport:
 # Logs (only populated if you redirected them, as DEPLOY.md step 2 does)
 tail -f "$HOME/Library/Logs/MacDeveloperBridge/http.stderr.log"
 
-# Restart: there is no LaunchAgent, so stop and re-run it.
-# disable.sh REMOVES the unlock file, so it must be recreated — without this the
-# front end starts and /healthz answers 200 while every tool call fails 503,
-# because /healthz never spawns the bridge.
-./scripts/disable.sh
-printf 'I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS\n' \
-  > "$HOME/Library/Application Support/MacDeveloperBridge/FULL_ACCESS_ENABLED"
-chmod 600 "$HOME/Library/Application Support/MacDeveloperBridge/FULL_ACCESS_ENABLED"
-export MAC_DEV_BRIDGE_HTTP_TOKEN='<the same token the plugin uses>'
-node mcp-http.mjs >>"$HOME/Library/Logs/MacDeveloperBridge/http.stderr.log" 2>&1 &
+# Preferred persistent path: the menu app supervises HTTP + cloudflared.
+./scripts/install-http-autostart.sh
+open -n /Applications/MacDevBridge.app --args --start
+
+# A zero-downtime product update leaves the current transport PIDs untouched:
+./scripts/deploy-menubar-update.sh
+# Immediate on-disk rollback, also without restarting the current transport:
+./scripts/rollback-menubar-update.sh
 ```
 
 Tunnel transport:
@@ -689,9 +698,9 @@ unset MAC_DEV_BRIDGE_FULL_ACCESS_ACK
 tail -f "$HOME/Library/Logs/MacDeveloperBridge/tunnel.stderr.log"
 ```
 
-`enable.sh` currently requires the LaunchAgent plist, so it does not work on the
-HTTP transport. To re-enable there, recreate the unlock file and restart the
-front end as in DEPLOY.md Option B.
+`enable.sh` remains the Secure MCP Tunnel helper. On the HTTP transport use the
+menu app (`--start`) and optionally `install-http-autostart.sh`; Start recreates the
+unlock latch before publishing the endpoint.
 
 `tunnel-client` normally exposes loopback health endpoints and an operator UI at `http://127.0.0.1:8080/healthz`, `/readyz`, `/metrics`, and `/ui` while running.
 
