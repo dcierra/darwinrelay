@@ -5,6 +5,7 @@
 ### 0.5.2 release/deployment hardening
 
 - Added zero-downtime signed menu-app deployment with same-filesystem atomic replacement, designated-requirement checks, a retained rollback bundle, and explicit rollback tooling; current `mcp-http`/Cloudflare/menu PIDs need not restart for helper updates.
+- Added a process-level single-instance lock before orphan reclamation so duplicate menu apps or LaunchAgent races cannot stop a live shared transport.
 - Added HTTP/Cloudflare per-user autostart through `local.mac-developer-bridge.http`: login startup, abnormal-exit restart, duplicate-instance avoidance when installed during a live session, and kill-switch/uninstall integration.
 - Added an opt-in self-hosted Apple Silicon native desktop E2E workflow so mutable AppKit/CGEvent behavior can be exercised on a real logged-in Mac instead of being pretended reliable on GitHub-hosted GUI sessions.
 - Switched private-line README/package identifiers to `dcierra/mac-developer-bridge-private`, derived the app bundle version from `package.json`, and bumped the background Chrome extension to 0.2.4.

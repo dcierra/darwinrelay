@@ -23,6 +23,26 @@ grep -Fq "$ROOT" "$PLIST"
 grep -Fq '<key>SuccessfulExit</key><false/>' "$PLIST"
 [[ "$(stat -f '%Lp' "$PLIST")" == "600" ]]
 
+# Auto mode must recognise an already-running MacDevBridge by process basename
+# and leave launchctl alone. This guards the production failure where a second
+# menu instance reclaimed the first instance's shared pidfiles/unlock state.
+mkdir -p "$TMP/bin"
+cat > "$TMP/bin/ps" <<'PS'
+#!/bin/sh
+printf '%s\n' '/Applications/MacDevBridge.app/Contents/MacOS/MacDevBridge'
+PS
+chmod +x "$TMP/bin/ps"
+PATH="$TMP/bin:$PATH" \
+HOME="$TMP/home" \
+MAC_DEV_BRIDGE_APP_PATH="$APP" \
+MAC_DEV_BRIDGE_PLIST_DIR="$TMP/home/Library/LaunchAgents" \
+MAC_DEV_BRIDGE_LOG_DIR="$TMP/logs" \
+MAC_DEV_BRIDGE_HTTP_AUTOSTART_LOAD_NOW=auto \
+LAUNCHCTL_BIN=/nonexistent \
+  "$ROOT/scripts/install-http-autostart.sh" > "$TMP/install-auto.out"
+grep -Fq 'next login' "$TMP/install-auto.out"
+grep -Fq 'current MacDevBridge process was left untouched' "$TMP/install-auto.out"
+
 HOME="$TMP/home" MAC_DEV_BRIDGE_PLIST_DIR="$TMP/home/Library/LaunchAgents" LAUNCHCTL_BIN=/nonexistent \
   "$ROOT/scripts/uninstall-http-autostart.sh" > "$TMP/uninstall.out"
 [[ ! -e "$PLIST" ]]
