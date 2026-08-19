@@ -332,7 +332,12 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var startGeneration = 0
 
     // Menu items kept as properties so polling can retitle them in place.
-    private let statusMenuItem = NSMenuItem(title: "Stopped", action: nil, keyEquivalent: "")
+    // The first rows are deliberately status-first: an operator should be able to
+    // open the menu and understand product/version/health before seeing credentials
+    // or maintenance actions.
+    private let brandMenuItem = NSMenuItem(title: "DarwinRelay", action: nil, keyEquivalent: "")
+    private let healthMenuItem = NSMenuItem(title: "Checking system status…", action: nil, keyEquivalent: "")
+    private let statusMenuItem = NSMenuItem(title: "MCP transport: Stopped", action: nil, keyEquivalent: "")
     private let urlMenuItem = NSMenuItem(title: "No URL yet", action: nil, keyEquivalent: "")
     private let tokenMenuItem = NSMenuItem(title: "Token: —", action: nil, keyEquivalent: "")
     private let clientIdMenuItem = NSMenuItem(title: "OAuth Client ID: —", action: nil, keyEquivalent: "")
@@ -514,31 +519,59 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Menu
 
+    private var displayVersion: String {
+        if let value = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+           !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return value
+        }
+        let package = Paths.packageDir + "/package.json"
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: package)),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let value = object["version"] as? String, !value.isEmpty {
+            return value
+        }
+        return "development"
+    }
+
+    private func setSymbol(_ name: String, on item: NSMenuItem, description: String) {
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: description)
+        image?.isTemplate = true
+        item.image = image
+    }
+
     private func buildMenu() {
+        menu.removeAllItems()
+        // AppKit's default auto-enable pass re-enables action-backed rows even when
+        // render() deliberately disables them (for example Server URL before a
+        // tunnel exists). Keep enablement an explicit part of our presentation state.
+        menu.autoenablesItems = false
+
+        brandMenuItem.isEnabled = false
+        brandMenuItem.attributedTitle = NSAttributedString(
+            string: "DarwinRelay · v\(displayVersion)",
+            attributes: [.font: NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)]
+        )
+        setSymbol("network", on: brandMenuItem, description: "DarwinRelay")
+        menu.addItem(brandMenuItem)
+
+        healthMenuItem.isEnabled = false
+        menu.addItem(healthMenuItem)
+
         statusMenuItem.isEnabled = false
+        setSymbol("antenna.radiowaves.left.and.right", on: statusMenuItem, description: "MCP transport")
         menu.addItem(statusMenuItem)
-        tunnelModeMenuItem.isEnabled = false
-        menu.addItem(tunnelModeMenuItem)
-        menu.addItem(.separator())
 
-        urlMenuItem.target = self
-        urlMenuItem.action = #selector(copyURL)
-        menu.addItem(urlMenuItem)
+        desktopPermissionsItem.target = self
+        desktopPermissionsItem.action = #selector(openDesktopPermissions)
+        desktopPermissionsItem.toolTip = "Accessibility drives native controls; Screen Recording captures pixels; Input event permission gates synthesized mouse/keyboard events; Full Disk Access affects protected filesystem paths. Click to open Privacy & Security."
+        setSymbol("display", on: desktopPermissionsItem, description: "Desktop permissions")
+        menu.addItem(desktopPermissionsItem)
 
-        clientIdMenuItem.target = self
-        clientIdMenuItem.action = #selector(copyClientId)
-        menu.addItem(clientIdMenuItem)
-
-        let setup = NSMenuItem(title: "Copy ChatGPT Setup", action: #selector(copySetup), keyEquivalent: "c")
-        setup.target = self
-        menu.addItem(setup)
-
-        // Kept, but demoted and labelled: ChatGPT's dialog has no field for it. It is
-        // the consent credential for the OAuth flow, and the auth method for any other
-        // Bearer-capable MCP client.
-        tokenMenuItem.target = self
-        tokenMenuItem.action = #selector(copyToken)
-        menu.addItem(tokenMenuItem)
+        strictApprovalsItem.target = self
+        strictApprovalsItem.action = #selector(toggleStrictApprovals)
+        strictApprovalsItem.toolTip = "Standard is the default. Strict requires short-lived scoped approvals for websites and foreground desktop mutations."
+        setSymbol("shield", on: strictApprovalsItem, description: "Safety mode")
+        menu.addItem(strictApprovalsItem)
 
         menu.addItem(.separator())
 
@@ -546,33 +579,67 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startStopItem.action = #selector(toggleBridge)
         menu.addItem(startStopItem)
 
-        strictApprovalsItem.target = self
-        strictApprovalsItem.action = #selector(toggleStrictApprovals)
-        strictApprovalsItem.toolTip = "Off by default: DarwinRelay can use the signed-in Chrome profile and foreground desktop tools without per-site/per-app approval files. Turn this on to require short-lived scoped approvals."
-        menu.addItem(strictApprovalsItem)
-
-        desktopPermissionsItem.target = self
-        desktopPermissionsItem.action = #selector(openDesktopPermissions)
-        desktopPermissionsItem.toolTip = "Accessibility drives native controls; Screen Recording captures pixels; Input event permission gates synthesized mouse/keyboard events; Full Disk Access affects protected filesystem paths. Click to open Privacy & Security."
-        menu.addItem(desktopPermissionsItem)
-
-        let regen = NSMenuItem(title: "Rotate Token…", action: #selector(rotateToken), keyEquivalent: "")
-        regen.target = self
-        menu.addItem(regen)
+        let setup = NSMenuItem(title: "Copy ChatGPT Setup", action: #selector(copySetup), keyEquivalent: "c")
+        setup.target = self
+        setSymbol("doc.on.doc", on: setup, description: "Copy ChatGPT setup")
+        menu.addItem(setup)
 
         menu.addItem(.separator())
+
+        let connection = NSMenuItem(title: "Connection", action: nil, keyEquivalent: "")
+        setSymbol("link", on: connection, description: "Connection")
+        let connectionMenu = NSMenu()
+        connectionMenu.autoenablesItems = false
+
+        tunnelModeMenuItem.isEnabled = false
+        connectionMenu.addItem(tunnelModeMenuItem)
+        connectionMenu.addItem(.separator())
+
+        urlMenuItem.target = self
+        urlMenuItem.action = #selector(copyURL)
+        connectionMenu.addItem(urlMenuItem)
+
+        clientIdMenuItem.target = self
+        clientIdMenuItem.action = #selector(copyClientId)
+        connectionMenu.addItem(clientIdMenuItem)
+
+        // ChatGPT's normal setup dialog does not require the bearer token, but
+        // non-ChatGPT Bearer clients and the consent flow can still use it.
+        tokenMenuItem.target = self
+        tokenMenuItem.action = #selector(copyToken)
+        connectionMenu.addItem(tokenMenuItem)
+
+        connectionMenu.addItem(.separator())
+        let regen = NSMenuItem(title: "Rotate Bearer Token…", action: #selector(rotateToken), keyEquivalent: "")
+        regen.target = self
+        connectionMenu.addItem(regen)
+        connection.submenu = connectionMenu
+        menu.addItem(connection)
+
+        let diagnostics = NSMenuItem(title: "Diagnostics & Settings", action: nil, keyEquivalent: "")
+        setSymbol("wrench.and.screwdriver", on: diagnostics, description: "Diagnostics and settings")
+        let diagnosticsMenu = NSMenu()
+        diagnosticsMenu.autoenablesItems = false
+
+        let privacy = NSMenuItem(title: "Open Privacy & Security…", action: #selector(openDesktopPermissions), keyEquivalent: "")
+        privacy.target = self
+        diagnosticsMenu.addItem(privacy)
 
         let logs = NSMenuItem(title: "Open Logs", action: #selector(openLogs), keyEquivalent: "")
         logs.target = self
-        menu.addItem(logs)
+        diagnosticsMenu.addItem(logs)
 
         let reveal = NSMenuItem(title: "Reveal Package in Finder", action: #selector(revealPackage), keyEquivalent: "")
         reveal.target = self
-        menu.addItem(reveal)
+        diagnosticsMenu.addItem(reveal)
+
+        diagnostics.submenu = diagnosticsMenu
+        menu.addItem(diagnostics)
 
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Quit (stops the bridge)", action: #selector(quit), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Quit DarwinRelay", action: #selector(quit), keyEquivalent: "q")
         quit.target = self
+        setSymbol("power", on: quit, description: "Quit DarwinRelay")
         menu.addItem(quit)
     }
 
@@ -603,34 +670,80 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             statusItem.button?.title = "DR"
         }
-        statusItem.button?.toolTip = "DarwinRelay — \(description)"
-
-        let mode = namedTunnel.map { "stable: \($0.hostname)" } ?? "quick tunnel — URL changes every start"
-        tunnelModeMenuItem.title = "Tunnel: \(mode)"
-        statusMenuItem.title = reclaimedOrphan && publicURL == nil
-            ? description + " (stopped an orphan from a previous run)"
-            : description
-        urlMenuItem.title = publicURL.map { "Copy Server URL: \($0)/mcp" }
-            ?? "No URL yet — waiting for cloudflared"
-        urlMenuItem.isEnabled = publicURL != nil
-        tokenMenuItem.title = token.isEmpty
-            ? "Token: —"
-            : "Copy Bearer Token (consent + non-ChatGPT clients)"
-        tokenMenuItem.isEnabled = !token.isEmpty
-        clientIdMenuItem.title = clientId.isEmpty ? "OAuth Client ID: —" : "Copy OAuth Client ID: \(clientId)"
-        clientIdMenuItem.isEnabled = !clientId.isEmpty
-
-        switch state {
-        case .running, .starting: startStopItem.title = "Stop"
-        default: startStopItem.title = "Start"
-        }
-        strictApprovalsItem.state = OperatorSettingsStore.strictApprovals() ? .on : .off
-        strictApprovalsItem.title = "Strict approvals"
+        statusItem.button?.toolTip = "DarwinRelay v\(displayVersion) — \(description)"
 
         func mark(_ granted: Bool?) -> String {
             guard let granted else { return "?" }
             return granted ? "✓" : "✗"
         }
+        let permissionsKnown = desktopPermissionCache != nil && fdaPermissionCache != nil
+        let desktopHealthy = desktopPermissionCache?.ax == true
+            && desktopPermissionCache?.screen == true
+            && desktopPermissionCache?.input == true
+            && fdaPermissionCache == true
+
+        switch state {
+        case .running where desktopHealthy:
+            healthMenuItem.title = "All systems operational"
+            setSymbol("checkmark.circle.fill", on: healthMenuItem, description: "All systems operational")
+        case .running where permissionsKnown:
+            healthMenuItem.title = "Running · desktop permissions need attention"
+            setSymbol("exclamationmark.triangle.fill", on: healthMenuItem, description: "Desktop permissions need attention")
+        case .running:
+            healthMenuItem.title = "Running · checking desktop permissions…"
+            setSymbol("checkmark.circle", on: healthMenuItem, description: "Running")
+        case .starting:
+            healthMenuItem.title = "Starting DarwinRelay…"
+            setSymbol("arrow.triangle.2.circlepath", on: healthMenuItem, description: "Starting DarwinRelay")
+        case .stopped where desktopHealthy:
+            healthMenuItem.title = "Ready · bridge is stopped"
+            setSymbol("checkmark.circle", on: healthMenuItem, description: "Ready")
+        case .stopped:
+            healthMenuItem.title = permissionsKnown ? "Stopped · desktop permissions need attention" : "Stopped · checking permissions…"
+            setSymbol("pause.circle", on: healthMenuItem, description: "DarwinRelay stopped")
+        case .failed:
+            healthMenuItem.title = "Action required"
+            setSymbol("exclamationmark.triangle.fill", on: healthMenuItem, description: "DarwinRelay needs attention")
+        }
+
+        let mode = namedTunnel.map { "Stable tunnel · \($0.hostname)" } ?? "Quick tunnel · URL changes every start"
+        tunnelModeMenuItem.title = mode
+        let transportSummary: String
+        switch state {
+        case .stopped: transportSummary = "MCP transport: Stopped"
+        case .starting: transportSummary = "MCP transport: Starting…"
+        case .running: transportSummary = "MCP transport: Running · localhost:\(httpPort)"
+        case .failed(let why): transportSummary = "MCP transport: Problem · \(why)"
+        }
+        statusMenuItem.title = reclaimedOrphan && publicURL == nil
+            ? transportSummary + " · orphan reclaimed"
+            : transportSummary
+        urlMenuItem.title = publicURL.map { "Copy Server URL: \($0)/mcp" }
+            ?? "Server URL: waiting for cloudflared"
+        urlMenuItem.isEnabled = publicURL != nil
+        tokenMenuItem.title = token.isEmpty
+            ? "Bearer Token: —"
+            : "Copy Bearer Token"
+        tokenMenuItem.isEnabled = !token.isEmpty
+        clientIdMenuItem.title = clientId.isEmpty ? "OAuth Client ID: —" : "Copy OAuth Client ID: \(clientId)"
+        clientIdMenuItem.isEnabled = !clientId.isEmpty
+
+        switch state {
+        case .running, .starting:
+            startStopItem.title = "Stop DarwinRelay"
+            setSymbol("stop.fill", on: startStopItem, description: "Stop DarwinRelay")
+        default:
+            startStopItem.title = "Start DarwinRelay"
+            setSymbol("play.fill", on: startStopItem, description: "Start DarwinRelay")
+        }
+
+        let strict = OperatorSettingsStore.strictApprovals()
+        strictApprovalsItem.state = strict ? .on : .off
+        strictApprovalsItem.title = strict ? "Safety: Strict approvals" : "Safety: Standard"
+        strictApprovalsItem.toolTip = strict
+            ? "Scoped short-lived approvals are required for websites and foreground desktop mutations."
+            : "Default mode: DarwinRelay may use configured browser/desktop capabilities without per-site/per-app approval files."
+
         desktopPermissionsItem.title = "Desktop: AX \(mark(desktopPermissionCache?.ax)) · Screen \(mark(desktopPermissionCache?.screen)) · Input \(mark(desktopPermissionCache?.input)) · FDA \(mark(fdaPermissionCache))"
     }
 
