@@ -129,7 +129,7 @@ front end (mcp-http.mjs); for the OpenAI Tunnel transport it is tunnel-client:
 
   Tunnel transport (a LaunchAgent exists):
     launchctl kickstart -k "gui/$(id -u)/<the label you installed>"
-  Cloudflare/HTTP transport (no LaunchAgent exists):
+  Cloudflare/HTTP transport (menu app or optional local.mac-developer-bridge.http LaunchAgent):
     use Stop then Start in the MacDevBridge menu bar app
 
 Listing what is actually loaded:

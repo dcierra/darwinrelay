@@ -2,6 +2,7 @@
 set -u
 
 LABEL="com.openai.mac-developer-bridge-tunnel"
+HTTP_LABEL="local.mac-developer-bridge.http"
 DOMAIN="gui/$(id -u)"
 INSTALL_DIR="${MAC_DEV_BRIDGE_INSTALL_DIR:-$HOME/.local/share/mac-developer-bridge}"
 DATA_DIR="${MAC_DEV_BRIDGE_DATA_DIR:-$HOME/Library/Application Support/MacDeveloperBridge}"
@@ -27,9 +28,12 @@ printf 'Log directory:     %s\n' "$LOG_DIR"
 printf 'Tunnel profile:    %s\n' "${PROFILE:-<unknown>}"
 printf 'Tunnel client:     %s\n' "${TUNNEL_CLIENT_BIN:-<not found>}"
 printf 'Unlock file:       %s (%s)\n' "$UNLOCK_FILE" "$([[ -f "$UNLOCK_FILE" ]] && printf present || printf missing)"
-printf '\nLaunchAgent\n-----------\n'
+printf '\nLaunchAgents\n------------\n'
 if [[ -n "$LAUNCHCTL_BIN" && -x "$LAUNCHCTL_BIN" ]]; then
-  "$LAUNCHCTL_BIN" print "$DOMAIN/$LABEL" 2>&1 | head -100 || true
+  for launch_label in "$LABEL" "$HTTP_LABEL"; do
+    printf -- '--- %s ---\n' "$launch_label"
+    "$LAUNCHCTL_BIN" print "$DOMAIN/$launch_label" 2>&1 | head -80 || true
+  done
 else
   printf 'launchctl unavailable.\n'
 fi

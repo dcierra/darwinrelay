@@ -1,13 +1,13 @@
 {
   "name": "mac-developer-bridge",
-  "version": "0.5.1-desktop.1",
+  "version": "0.5.2-desktop.1",
   "type": "module",
   "description": "Give ChatGPT terminal, browser, and native macOS desktop control through one local MCP bridge.",
   "scripts": {
     "start": "node bridge.mjs",
     "start:http": "node mcp-http.mjs",
     "check": "node --check bridge.mjs && node --check mcp-http.mjs && node --check lib/chrome-extension-client.mjs && node --check lib/mac-ui-helper.mjs && node --check lib/mac-ui-cursor.mjs && node --check lib/advanced-browser.mjs && node --check scripts/chrome-native-host.mjs && node --check chrome-extension/service-worker.js && bash scripts/check-mac-ui-helper.sh && bash scripts/check-mac-ui-cursor.sh && bash -n scripts/desktop-doctor.sh && bash scripts/check-menubar.sh && bash scripts/check-desktop-fixture.sh",
-    "test": "node tests/smoke.mjs && node tests/integration.mjs && node tests/adversarial.mjs && node tests/http.mjs && node tests/oauth.mjs && node tests/pty.mjs && node tests/federation.mjs && node tests/chrome-background.mjs && bash tests/background-chrome-installer.sh && node tests/desktop-control.mjs && node tests/advanced-browser.mjs && node tests/desktop-control-native.mjs && bash tests/installer-mock.sh"
+    "test": "node tests/smoke.mjs && node tests/integration.mjs && node tests/adversarial.mjs && node tests/http.mjs && node tests/oauth.mjs && node tests/pty.mjs && node tests/federation.mjs && node tests/chrome-background.mjs && bash tests/background-chrome-installer.sh && node tests/desktop-control.mjs && node tests/advanced-browser.mjs && bash tests/http-autostart.sh && bash tests/menubar-atomic-install.sh && node tests/desktop-control-native.mjs && bash tests/installer-mock.sh"
   },
   "engines": {
     "node": ">=18"
@@ -33,7 +33,7 @@
     "developer-tools",
     "ai-agents"
   ],
-  "mcpName": "io.github.alexanderradahl/mac-developer-bridge",
+  "mcpName": "io.github.dcierra/mac-developer-bridge-private",
   "bin": {
     "mac-developer-bridge": "./bridge.mjs",
     "mac-developer-bridge-http": "./mcp-http.mjs"
