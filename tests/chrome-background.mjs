@@ -384,6 +384,39 @@ try {
 
   await bridgeAfterRestart.stop();
   await host.stop();
+
+  // An explicitly selected dedicated local Chrome profile may intentionally stay
+  // signed out (for example, an isolated ChatGPT-only profile). The host accepts
+  // that mode only when the binding was written explicitly as dedicated-local;
+  // legacy/signed-in bindings remain identity-pinned by email + GAIA id.
+  await fs.rm(socketPath, { force: true });
+  await fs.writeFile(profileBindingFile, JSON.stringify({
+    profileDirectory: "Profile 2",
+    profileName: "ChatGPT_1",
+    bindingMode: "dedicated-local",
+    expectedSignedIn: false,
+  }), { mode: 0o600 });
+  const localHost = startFakeExtensionHost();
+  await waitForPath(socketPath);
+  localHost.ready({ signedIn: false, email: "", id: "" });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const localProfileStatus = await backgroundChromeStatus({ socketPath });
+  assert.equal(localProfileStatus.extensionReady, true);
+  assert.equal(localProfileStatus.profileBinding.profileDirectory, "Profile 2");
+  assert.equal(localProfileStatus.profileBinding.profileName, "ChatGPT_1");
+  assert.equal(localProfileStatus.profileBinding.bindingMode, "dedicated-local");
+  assert.equal(localProfileStatus.extension.profile.matchesBinding, true);
+  assert.equal(localProfileStatus.extension.profile.signedIn, false);
+  const localWorkspace = await backgroundChromeCall("workspace.status", {}, [], { socketPath });
+  assert.equal(localWorkspace.echoedMethod, "workspace.status");
+
+  localHost.ready({ signedIn: true, email: "unexpected@example.com", id: "777777777777777777777" });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  const localProfileMismatch = await backgroundChromeStatus({ socketPath });
+  assert.equal(localProfileMismatch.extensionReady, false);
+  assert.equal(localProfileMismatch.profileError.code, "CHROME_PROFILE_MISMATCH");
+  await localHost.stop();
+
   console.log("background Chrome test passed");
 } finally {
   await fs.rm(tempRoot, { recursive: true, force: true });

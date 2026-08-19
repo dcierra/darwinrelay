@@ -46,9 +46,16 @@ async function readProfileBinding() {
     const parsed = JSON.parse(await fsp.readFile(PROFILE_BINDING_FILE, "utf8"));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("binding is not an object");
     if (typeof parsed.profileDirectory !== "string" || !parsed.profileDirectory) throw new Error("profileDirectory is missing");
-    if (typeof parsed.expectedEmail !== "string" || !parsed.expectedEmail.includes("@")) throw new Error("expectedEmail is missing");
-    if (typeof parsed.expectedGaiaId !== "string" || !/^[0-9]+$/.test(parsed.expectedGaiaId)) throw new Error("expectedGaiaId is missing");
-    return parsed;
+    const bindingMode = parsed.bindingMode || "signed-in";
+    if (!["signed-in", "dedicated-local"].includes(bindingMode)) throw new Error(`unsupported bindingMode ${bindingMode}`);
+    if (bindingMode === "signed-in") {
+      if (typeof parsed.expectedEmail !== "string" || !parsed.expectedEmail.includes("@")) throw new Error("expectedEmail is missing");
+      if (typeof parsed.expectedGaiaId !== "string" || !/^[0-9]+$/.test(parsed.expectedGaiaId)) throw new Error("expectedGaiaId is missing");
+    } else {
+      if (typeof parsed.profileName !== "string" || !parsed.profileName.trim()) throw new Error("profileName is missing for dedicated-local binding");
+      if (parsed.expectedSignedIn !== false) throw new Error("dedicated-local binding must set expectedSignedIn=false");
+    }
+    return { ...parsed, bindingMode };
   } catch (error) {
     const wrapped = new Error(`Background Chrome profile binding is unavailable at ${PROFILE_BINDING_FILE}: ${error?.message || error}`);
     wrapped.code = "CHROME_PROFILE_BINDING_INVALID";
@@ -61,7 +68,9 @@ const profileBinding = await readProfileBinding();
 function publicProfileBinding() {
   return {
     profileDirectory: profileBinding.profileDirectory,
-    expectedEmail: profileBinding.expectedEmail,
+    profileName: profileBinding.profileName || null,
+    bindingMode: profileBinding.bindingMode,
+    ...(profileBinding.bindingMode === "signed-in" ? { expectedEmail: profileBinding.expectedEmail } : { expectedSignedIn: false }),
   };
 }
 
@@ -90,16 +99,25 @@ function handleNativeMessage(message) {
   if (message.type === "ready") {
     extensionConnected = true;
     const profile = message.profile && typeof message.profile === "object" ? message.profile : {};
-    const signedIn = profile.signedIn === true && typeof profile.email === "string" && typeof profile.id === "string";
-    const emailMatch = signedIn && profile.email.toLowerCase() === profileBinding.expectedEmail.toLowerCase();
-    const idMatch = signedIn && profile.id === profileBinding.expectedGaiaId;
-    extensionReady = Boolean(signedIn && emailMatch && idMatch);
-    profileError = extensionReady ? null : {
-      code: !signedIn ? "CHROME_PROFILE_SIGNED_OUT" : "CHROME_PROFILE_MISMATCH",
-      message: !signedIn
-        ? `The Mac Developer Bridge extension is running in a Chrome profile with no signed-in primary account. Expected ${profileBinding.expectedEmail}.`
-        : `The Mac Developer Bridge extension is running in the wrong Chrome profile (${profile.email || "unknown"}). Expected ${profileBinding.expectedEmail}.`,
-    };
+    const reportsSignedIn = profile.signedIn === true;
+    const signedIn = reportsSignedIn && typeof profile.email === "string" && typeof profile.id === "string";
+    if (profileBinding.bindingMode === "dedicated-local") {
+      extensionReady = !reportsSignedIn;
+      profileError = extensionReady ? null : {
+        code: "CHROME_PROFILE_MISMATCH",
+        message: `The Mac Developer Bridge extension is connected from a signed-in Chrome profile, but ${profileBinding.profileName} (${profileBinding.profileDirectory}) is configured as a dedicated local signed-out profile. Re-run install-background-chrome.sh if that profile was intentionally signed in.`,
+      };
+    } else {
+      const emailMatch = signedIn && profile.email.toLowerCase() === profileBinding.expectedEmail.toLowerCase();
+      const idMatch = signedIn && profile.id === profileBinding.expectedGaiaId;
+      extensionReady = Boolean(signedIn && emailMatch && idMatch);
+      profileError = extensionReady ? null : {
+        code: !signedIn ? "CHROME_PROFILE_SIGNED_OUT" : "CHROME_PROFILE_MISMATCH",
+        message: !signedIn
+          ? `The Mac Developer Bridge extension is running in a Chrome profile with no signed-in primary account. Expected ${profileBinding.expectedEmail}.`
+          : `The Mac Developer Bridge extension is running in the wrong Chrome profile (${profile.email || "unknown"}). Expected ${profileBinding.expectedEmail}.`,
+      };
+    }
     extensionInfo = {
       version: message.version || null,
       extensionId: message.extensionId || null,
@@ -108,10 +126,12 @@ function handleNativeMessage(message) {
         signedIn,
         email: typeof profile.email === "string" ? profile.email : null,
         matchesBinding: extensionReady,
+        bindingMode: profileBinding.bindingMode,
       },
     };
     if (extensionReady) {
-      log(`extension ready id=${extensionInfo.extensionId || "unknown"} version=${extensionInfo.version || "unknown"} profile=${profile.email}`);
+      const profileLabel = profileBinding.bindingMode === "dedicated-local" ? `${profileBinding.profileName} (${profileBinding.profileDirectory})` : profile.email;
+      log(`extension ready id=${extensionInfo.extensionId || "unknown"} version=${extensionInfo.version || "unknown"} profile=${profileLabel}`);
     } else {
       log(`extension connected but profile binding refused: ${profileError.message}`);
     }
