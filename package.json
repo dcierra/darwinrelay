@@ -67,7 +67,8 @@
     "CODE_OF_CONDUCT.md",
     "LICENSE",
     "docs/",
-    "SHA256SUMS"
+    "SHA256SUMS",
+    "Package.swift"
   ],
   "contributors": [
     "Alexander Rådahl Benz <3107277+alexanderradahl@users.noreply.github.com>"
