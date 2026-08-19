@@ -36,7 +36,7 @@ let package = Package(
             name: "DarwinRelayMenu",
             path: "menubar",
             exclude: ["build.sh"],
-            sources: ["MenuBarApp.swift"],
+            sources: ["MenuBarApp.swift", "TunnelURL.swift"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("ApplicationServices"),

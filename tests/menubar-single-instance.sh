@@ -18,13 +18,14 @@ BIN="$TMP/DarwinRelay"
 DATA="$TMP/data"
 LOGS="$TMP/logs"
 mkdir -p "$DATA" "$LOGS"
-xcrun swiftc -O \
+xcrun swiftc -O -parse-as-library \
   -target "$(uname -m)-apple-macos13.0" \
   -framework AppKit \
   -framework ApplicationServices \
   -framework CoreGraphics \
   -o "$BIN" \
-  "$ROOT/menubar/MenuBarApp.swift"
+  "$ROOT/menubar/MenuBarApp.swift" \
+  "$ROOT/menubar/TunnelURL.swift"
 
 DARWINRELAY_DATA_DIR="$DATA" DARWINRELAY_LOG_DIR="$LOGS" DARWINRELAY_HOME="$ROOT" \
   "$BIN" >"$TMP/first.out" 2>"$TMP/first.err" &
