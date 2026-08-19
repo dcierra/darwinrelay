@@ -1,0 +1,46 @@
+name: CodeQL Swift
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.swift'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - '.github/workflows/codeql-swift.yml'
+  schedule:
+    - cron: '47 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  packages: read
+
+concurrency:
+  group: codeql-swift-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift:
+    name: CodeQL / Swift
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: swift
+          build-mode: manual
+      - name: Compile DarwinRelay native targets for analysis
+        run: swift build -c debug
+      - name: Analyze Swift
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:swift

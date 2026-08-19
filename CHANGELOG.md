@@ -4,6 +4,7 @@ All notable public DarwinRelay changes will be documented here.
 
 ## Unreleased
 
+- Split Swift CodeQL into a path-filtered workflow: `main` re-analysis now runs only when Swift/SwiftPM analysis inputs change, while weekly/manual full scans remain available. Added dedicated JavaScript and Swift CodeQL badges and documented the policy for coding agents.
 ## 0.6.1 — 2026-08-19
 
 - Hardened HTTP error boundaries so arbitrary request/bridge exception text is logged locally but never serialized to remote callers.

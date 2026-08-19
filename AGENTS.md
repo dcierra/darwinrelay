@@ -85,12 +85,18 @@ Do not weaken tests merely because hosted macOS cannot provide reliable interact
 
 ## CI expectations
 
-Public CI runs on GitHub-hosted macOS, not a maintainer workstation. The expected visible checks are:
+Public CI runs on GitHub-hosted runners, not a maintainer workstation. The expected functional checks are:
 
 - `Static checks`
 - `Core & protocol tests`
 - `Desktop control tests`
 - `Install & lifecycle tests`
+
+Security scanning is split deliberately:
+
+- `CodeQL / JavaScript` runs on pull requests, every `main` push, and weekly.
+- `CodeQL / Swift` is intentionally **not** a PR blocker. It runs after `main` pushes only when the commit changes a `*.swift` file, `Package.swift`/`Package.resolved`, or the Swift CodeQL workflow itself; it also runs weekly and on manual dispatch.
+- Do not remove a Swift-relevant path from that trigger merely to shorten CI. If a release contains Swift/native security-sensitive source changes, require a clean Swift CodeQL result on that source before tagging. Metadata-only version/docs releases do not need to re-extract identical Swift code.
 
 `Static checks` also scans full Git history with gitleaks. If you add an intentional non-secret that triggers detection, justify it narrowly in `.gitleaks.toml`; do not broadly suppress rules.
 

@@ -1,6 +1,8 @@
 # DarwinRelay
 
 [![CI](https://github.com/dcierra/darwinrelay/actions/workflows/ci.yml/badge.svg)](https://github.com/dcierra/darwinrelay/actions/workflows/ci.yml)
+[![CodeQL: JavaScript](https://github.com/dcierra/darwinrelay/actions/workflows/codeql.yml/badge.svg)](https://github.com/dcierra/darwinrelay/actions/workflows/codeql.yml)
+[![CodeQL: Swift](https://github.com/dcierra/darwinrelay/actions/workflows/codeql-swift.yml/badge.svg)](https://github.com/dcierra/darwinrelay/actions/workflows/codeql-swift.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **Native macOS execution runtime for MCP agents: shell, PTY, background Chrome, and Accessibility-based desktop control.**
