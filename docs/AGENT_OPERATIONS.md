@@ -235,4 +235,5 @@ The menu app/HTTP child can briefly drop the MCP connection during supervised re
 - Native desktop model: `docs/DESKTOP_CONTROL.md`
 - Security contract: `SECURITY.md`
 - Deployment transports: `DEPLOY.md`
+- Development/public-private workflow: `docs/DEVELOPMENT_MODEL.md`
 - Upstream lineage: `UPSTREAM.md`

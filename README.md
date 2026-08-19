@@ -188,6 +188,8 @@ Security reports should use GitHub's private vulnerability reporting rather than
 
 DarwinRelay is independently maintained and substantially diverged from **Mac Developer Bridge** by Alexander Rådahl Benz. The inherited upstream history is intentionally preserved, and the original MIT copyright notice remains in [LICENSE](LICENSE). See [UPSTREAM.md](UPSTREAM.md) for the exact lineage and attribution policy.
 
+The public `dcierra/darwinrelay` repository is the canonical development source. The previous private repository is retained only as a temporary legacy production/rollback lineage until the installed 0.5.x runtime is migrated; it is not a second active development branch. See [docs/DEVELOPMENT_MODEL.md](docs/DEVELOPMENT_MODEL.md) for the commit-history mapping and future workflow.
+
 DarwinRelay is not affiliated with or endorsed by OpenAI, Apple, Google, Cloudflare, or the upstream maintainer.
 
 ## License

@@ -18,7 +18,8 @@ For any non-trivial task, inspect:
 4. `docs/ARCHITECTURE.md` — component/data-flow architecture.
 5. `docs/AGENT_OPERATIONS.md` — runtime tool catalog and agent operating guidance.
 6. `docs/DESKTOP_CONTROL.md` — native UI control model and limitations.
-7. `UPSTREAM.md` — upstream lineage and attribution policy.
+7. `docs/DEVELOPMENT_MODEL.md` — canonical public/private/upstream workflow and history mapping.
+8. `UPSTREAM.md` — upstream lineage and attribution policy.
 
 ## Repository map
 
