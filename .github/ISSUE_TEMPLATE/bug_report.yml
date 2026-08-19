@@ -10,7 +10,7 @@ body:
     id: version
     attributes:
       label: DarwinRelay version / commit
-      placeholder: "v0.6.0 or git SHA"
+      placeholder: "v0.6.1 or git SHA"
     validations:
       required: true
   - type: input
