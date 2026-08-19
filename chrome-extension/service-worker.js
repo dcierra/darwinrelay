@@ -1,5 +1,5 @@
 const NATIVE_HOST = "io.github.alexanderradahl.mac_developer_bridge";
-const VERSION = "0.2.3";
+const VERSION = chrome.runtime.getManifest().version;
 const WORKSPACE_KEY = "macDeveloperBridgeWorkspace";
 const WORKSPACE_GROUP_TITLE = "MDB";
 const WORKSPACE_GROUP_COLOR = "blue";
