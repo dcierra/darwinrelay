@@ -1059,7 +1059,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let text = String(decoding: data, as: UTF8.self)
             try? text.data(using: .utf8)?.append(toFile: Paths.tunnelLog)
             guard let self else { return }
-            if let found = Self.firstTryCloudflareURL(in: text) {
+            if let found = TunnelURL.firstTryCloudflareURL(in: text) {
                 DispatchQueue.main.async {
                     if self.publicURL == nil {
                         self.publicURL = found
@@ -1157,16 +1157,6 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         return "\(name) exited (code \(process.terminationStatus))"
-    }
-
-    static func firstTryCloudflareURL(in text: String) -> String? {
-        // Matches the quick-tunnel hostname cloudflared announces.
-        let pattern = "https://[a-z0-9-]+\\.trycloudflare\\.com"
-        guard let re = try? NSRegularExpression(pattern: pattern),
-              let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              let r = Range(m.range, in: text)
-        else { return nil }
-        return String(text[r])
     }
 
     private func appendHandle(_ path: String) -> FileHandle {
@@ -1272,8 +1262,13 @@ func loginShellPATH() -> String? {
 
 // MARK: - Entry point
 
-let app = NSApplication.shared
-let controller = Controller()
-app.delegate = controller
-app.setActivationPolicy(.accessory)   // menu bar only, no Dock icon
-app.run()
+@main
+struct DarwinRelayMenuMain {
+    static func main() {
+        let app = NSApplication.shared
+        let controller = Controller()
+        app.delegate = controller
+        app.setActivationPolicy(.accessory)   // menu bar only, no Dock icon
+        app.run()
+    }
+}

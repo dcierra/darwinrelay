@@ -139,22 +139,28 @@ if (!/^[\x21-\x7e]+$/.test(TOKEN)) {
 // granted, an attacker-controlled model could read it back from there. Use
 // DARWINRELAY_HTTP_TOKEN_FILE if that matters to you.
 const TOKEN_DIGEST = crypto.createHash("sha256").update(TOKEN, "latin1").digest();
-// Read the secret before the scrub below removes it. A plain SHA-256(secret)
-// would be a reusable offline verifier if this in-memory value were ever
-// disclosed. Instead tag the secret with a fresh per-process HMAC key. Nothing
-// is persisted, both tags are fixed-length for timingSafeEqual(), and an online
-// attacker cannot derive a reusable verifier from the tag alone.
+// Read the optional OAuth client secret before the scrub below removes it. This
+// is an in-memory equality credential, not a password database: never persist a
+// password hash/verifier. Encode length + UTF-8 bytes into one fixed-size buffer
+// so every configured-secret comparison uses exactly one timingSafeEqual() over
+// the same number of bytes. The original environment value is deleted before the
+// bridge child is spawned.
 const MAX_CLIENT_SECRET_BYTES = 4096;
-const CLIENT_SECRET_COMPARE_KEY = crypto.randomBytes(32);
-function clientSecretTag(value) {
-  return crypto.createHmac("sha256", CLIENT_SECRET_COMPARE_KEY).update(String(value), "utf8").digest();
+const CLIENT_SECRET_COMPARE_BYTES = MAX_CLIENT_SECRET_BYTES + 4;
+function clientSecretCompareBuffer(value) {
+  const raw = Buffer.from(String(value), "utf8");
+  if (raw.length > MAX_CLIENT_SECRET_BYTES) return null;
+  const fixed = Buffer.alloc(CLIENT_SECRET_COMPARE_BYTES);
+  fixed.writeUInt32BE(raw.length, 0);
+  raw.copy(fixed, 4);
+  return fixed;
 }
-const CLIENT_SECRET_TAG = (() => {
+const CLIENT_SECRET_BUFFER = (() => {
   const configured = process.env.DARWINRELAY_OAUTH_CLIENT_SECRET || "";
-  if (Buffer.byteLength(configured, "utf8") > MAX_CLIENT_SECRET_BYTES) {
-    die(`DARWINRELAY_OAUTH_CLIENT_SECRET must be at most ${MAX_CLIENT_SECRET_BYTES} bytes.`);
-  }
-  return configured ? clientSecretTag(configured) : null;
+  if (!configured) return null;
+  const fixed = clientSecretCompareBuffer(configured);
+  if (fixed === null) die(`DARWINRELAY_OAUTH_CLIENT_SECRET must be at most ${MAX_CLIENT_SECRET_BYTES} bytes.`);
+  return fixed;
 })();
 const CONFIGURED_CLIENT_ID = (process.env.DARWINRELAY_OAUTH_CLIENT_ID || "").trim();
 const CHILD_ENV = { ...process.env };
@@ -1021,17 +1027,14 @@ async function tokenPost(req, res) {
     return oauthError(res, 401, "invalid_client", "unknown client_id");
   }
   if (cred.secret) {
-    if (CLIENT_SECRET_TAG === null) {
+    if (CLIENT_SECRET_BUFFER === null) {
       // A secret is optional and must never be REQUIRED, so one that this
       // server was never configured with cannot be a hard failure either --
       // rejecting it would strand a client whose dialog filled the field in.
       log("POST /token presented a client_secret but none is configured; ignoring it");
     } else {
-      if (Buffer.byteLength(cred.secret, "utf8") > MAX_CLIENT_SECRET_BYTES) {
-        return oauthError(res, 401, "invalid_client", "client authentication failed");
-      }
-      const got = clientSecretTag(cred.secret);
-      if (!crypto.timingSafeEqual(got, CLIENT_SECRET_TAG)) {
+      const got = clientSecretCompareBuffer(cred.secret);
+      if (got === null || !crypto.timingSafeEqual(got, CLIENT_SECRET_BUFFER)) {
         return oauthError(res, 401, "invalid_client", "client authentication failed");
       }
     }

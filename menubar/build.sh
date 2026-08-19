@@ -75,13 +75,14 @@ PLIST
 # -target, swiftc uses the host triple (macos26 here), so the plist promised 13.0
 # while the binary would dyld-error on anything older instead of showing the clean
 # "requires a newer macOS" dialog.
-swiftc -O \
+swiftc -O -parse-as-library \
   -target "$(uname -m)-apple-macos13.0" \
   -framework AppKit \
   -framework ApplicationServices \
   -framework CoreGraphics \
   -o "$APP/Contents/MacOS/$NAME" \
-  "$HERE/MenuBarApp.swift"
+  "$HERE/MenuBarApp.swift" \
+  "$HERE/TunnelURL.swift"
 
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 

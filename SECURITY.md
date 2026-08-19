@@ -28,7 +28,7 @@ The public HTTP/OAuth transport treats exception text as local diagnostic data. 
 
 ## OAuth client-secret comparison
 
-An optional configured OAuth `client_secret` is never persisted. DarwinRelay tags it in memory with HMAC-SHA256 under a fresh random per-process comparison key, then scrubs the original environment value before spawning the bridge. Presented secrets are bounded to 4096 UTF-8 bytes and compared as fixed-length tags with `timingSafeEqual`. This avoids keeping a plain reusable SHA-256(secret) verifier while also avoiding a deliberately expensive password KDF on the public `/token` endpoint, where attacker-controlled repeated requests could otherwise become a CPU denial-of-service primitive.
+An optional configured OAuth `client_secret` is never persisted. DarwinRelay encodes its UTF-8 length and bytes into a fixed 4100-byte in-memory comparison buffer, then scrubs the original environment value before spawning the bridge. Presented secrets are bounded to 4096 UTF-8 bytes, encoded to the same fixed shape, and compared with one `timingSafeEqual`. This avoids both a reusable password-hash verifier and a deliberately expensive password KDF on the public `/token` endpoint, where attacker-controlled repeated requests could otherwise become a CPU denial-of-service primitive.
 
 ## Request limits
 

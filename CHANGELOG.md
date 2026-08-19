@@ -5,8 +5,9 @@ All notable public DarwinRelay changes will be documented here.
 ## Unreleased
 
 - Hardened HTTP error boundaries so arbitrary request/bridge exception text is logged locally but never serialized to remote callers.
-- Replaced the in-memory plain SHA-256 OAuth client-secret verifier with a per-process HMAC tag and bounded client-secret input.
+- Replaced the in-memory plain SHA-256 OAuth client-secret verifier with a bounded fixed-size `timingSafeEqual` representation that does not hash the secret.
 - Strengthened the OAuth consent regression test to compare the exact validated redirect row rather than relying on URL substring matching.
+- Replaced regex-based Cloudflare quick-tunnel URL extraction with structural URL/host validation and hostile-input native regression coverage.
 - Added CodeQL scanning for JavaScript and Swift plus SwiftPM metadata for deterministic native analysis builds.
 
 ## 0.6.0 — Public edition
