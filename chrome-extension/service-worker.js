@@ -35,7 +35,19 @@ function compilePatterns(patterns) {
 
 function urlAllowed(url, compiled) {
   if (typeof url !== "string" || !url) return false;
-  return compiled.some(({ pattern }) => pattern.test(url));
+  let parsed = null;
+  return compiled.some(({ source, pattern }) => {
+    // Relaxed mode uses Chrome-style all-host match patterns. URLPattern treats an
+    // omitted port more narrowly, so http://*/* and https://*/* incorrectly reject
+    // explicit ports such as localhost:18765. Preserve the intended all-origin
+    // semantics for these two bridge-generated patterns while leaving scoped
+    // operator URLPattern grants unchanged.
+    if (source === "http://*/*" || source === "https://*/*") {
+      try { parsed ||= new URL(url); } catch { return false; }
+      return parsed.protocol === (source.startsWith("https:") ? "https:" : "http:");
+    }
+    return pattern.test(url);
+  });
 }
 
 function assertUrlAllowed(url, compiled) {

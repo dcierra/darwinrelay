@@ -15,6 +15,7 @@ const ERA = process.env.STUB_ERA || "legacy";
 const PAGINATE = process.env.STUB_PAGINATE === "1";
 const GARBAGE = process.env.STUB_GARBAGE === "1";
 const HUGE_LINE = process.env.STUB_HUGE_LINE === "1";
+const HUGE_LINE_AFTER_TOOLS_LIST = process.env.STUB_HUGE_LINE_AFTER_TOOLS_LIST === "1";
 const LONG_TOOL = process.env.STUB_LONG_TOOL === "1";
 const NAME = process.env.STUB_NAME || "stub-mcp-server";
 // A slow-but-alive provider. Every tools/list page is answered after a delay, so
@@ -197,12 +198,22 @@ if (GARBAGE) {
   process.stdout.write("{ not json at all\n");
   process.stdout.write("\n");
 }
-if (HUGE_LINE) {
+function emitHugeLine() {
   // One line larger than the supervisor's pending-line cap. The test passes the
   // size so the fixture cannot drift below the cap and silently stop exercising
   // it — which is exactly what happened when the cap was raised. The trailing
   // newline is deliberate: it is what the framer must resynchronise on.
   process.stdout.write(`${"Z".repeat(Number(process.env.STUB_HUGE_LINE_BYTES || 9 * 1024 * 1024))}\n`);
+}
+if (HUGE_LINE && !HUGE_LINE_AFTER_TOOLS_LIST) emitHugeLine();
+
+let hugeLineScheduled = false;
+function scheduleHugeLineAfterReadyHandshake() {
+  if (!HUGE_LINE || !HUGE_LINE_AFTER_TOOLS_LIST || hugeLineScheduled) return;
+  hugeLineScheduled = true;
+  // tools/list is the fixture's final startup request. Defer the noise so the
+  // supervisor has consumed that response and entered steady state first.
+  setTimeout(emitHugeLine, 500);
 }
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -280,6 +291,7 @@ rl.on("line", async (line) => {
   if (method === "tools/list") {
     if (TOOLS_LIST_DELAY_MS > 0) await sleep(TOOLS_LIST_DELAY_MS);
     send({ jsonrpc: "2.0", id, result: toolsPage(params?.cursor) });
+    scheduleHugeLineAfterReadyHandshake();
     return;
   }
   if (method === "tools/call") {

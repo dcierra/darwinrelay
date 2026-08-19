@@ -614,6 +614,32 @@ func postInputEvent(_ event: CGEvent, pid: pid_t?, mode: String) throws {
     }
 }
 
+// Unicode payloads posted through the global HID tap can be acknowledged by
+// CoreGraphics yet never reach AppKit text responders on recent macOS releases.
+// Named/raw key events still need the real global HID path for shortcuts and
+// normal keyboard semantics, but Unicode text is reliable when delivered to the
+// application process directly. In foreground mode, bind the text burst to the
+// application that is actually frontmost after any requested activation. This
+// preserves foreground semantics while avoiding silent text loss.
+func unicodeTextDeliveryPid(mode: String, requestedPid: pid_t?) throws -> pid_t? {
+    if mode == "background" {
+        guard let requestedPid else {
+            throw HelperFailure(code: "UI_INPUT_TARGET_REQUIRED", message: "background input requires pid")
+        }
+        return requestedPid
+    }
+    return NSWorkspace.shared.frontmostApplication?.processIdentifier
+}
+
+func postUnicodeTextEvent(_ event: CGEvent, deliveryPid: pid_t?) {
+    if let deliveryPid {
+        event.postToPid(deliveryPid)
+    } else {
+        // Defensive fallback for unusual sessions without a frontmost app.
+        event.post(tap: .cghidEventTap)
+    }
+}
+
 func guardInputFocus(_ before: pid_t?, target: pid_t?, mode: String, preserveFocus: Bool, operation: String) throws {
     guard mode == "background", preserveFocus, let target, let before, before != target else { return }
     let after = NSWorkspace.shared.frontmostApplication?.processIdentifier
@@ -798,6 +824,7 @@ func postKeyboard(_ input: [String: Any]) throws -> [String: Any] {
     let before = NSWorkspace.shared.frontmostApplication?.processIdentifier
     try maybeActivateInputTarget(input, pid: pid, mode: mode)
     if let text = input["text"] as? String {
+        let deliveryPid = try unicodeTextDeliveryPid(mode: mode, requestedPid: pid)
         let units = Array(text.utf16)
         var offset = 0
         while offset < units.count {
@@ -816,8 +843,8 @@ func postKeyboard(_ input: [String: Any]) throws -> [String: Any] {
                 down.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
                 up.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress)
             }
-            try postInputEvent(down, pid: pid, mode: mode)
-            try postInputEvent(up, pid: pid, mode: mode)
+            postUnicodeTextEvent(down, deliveryPid: deliveryPid)
+            postUnicodeTextEvent(up, deliveryPid: deliveryPid)
             // Keep the short-lived helper alive long enough for WindowServer to
             // consume each queued text event. A zero-delay process exit can make
             // CGEvent posting report success while the keystroke never reaches the
@@ -827,7 +854,7 @@ func postKeyboard(_ input: [String: Any]) throws -> [String: Any] {
             try guardInputFocus(before, target: pid, mode: mode, preserveFocus: preserveFocus, operation: "typing")
         }
         usleep(30_000)
-        return ["typedCharacters": text.count, "inputMode": mode, "targetPid": jsonPid(pid), "performed": true]
+        return ["typedCharacters": text.count, "inputMode": mode, "targetPid": jsonPid(deliveryPid), "performed": true]
     }
     let key = input["key"] as? String
     let code: CGKeyCode

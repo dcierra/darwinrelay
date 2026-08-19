@@ -11,7 +11,7 @@ ChatGPT
   v
 bridge.mjs
   |-- shell / filesystem / PTY / Codex
-  |-- signed-in Background Chrome workspace
+  |-- configured Background Chrome workspace
   `-- native ui_* tools
         |
         | bounded JSON stdin/stdout; one helper process per call
@@ -186,7 +186,7 @@ Observation itself is privileged: screenshots, OCR, clipboard reads and ordinary
 
 ## Browser relationship
 
-Normal web work should still use the signed-in `chrome_*` MDB workspace because it can operate without routine focus theft. Direct Chrome AppleScript/JXA/executable/shell-web-open paths remain rejected by `shell_exec`/`shell_start`.
+Normal web work should still use the configured `chrome_*` MDB workspace because it can operate without routine focus theft. The selected Chrome profile may be account-bound or an explicitly isolated signed-out `dedicated-local` profile. Direct Chrome AppleScript/JXA/executable/shell-web-open paths remain rejected by `shell_exec`/`shell_start`.
 
 The native `ui_*` surface is deliberately capable of foreground browser/OS interaction when a background extension cannot own the surface, such as native panels or visual-only controls.
 

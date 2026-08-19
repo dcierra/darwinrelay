@@ -5,7 +5,7 @@
 [![CI](https://github.com/alexanderradahl/mac-developer-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/alexanderradahl/mac-developer-bridge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Mac Developer Bridge turns a ChatGPT conversation into the reasoning layer for your actual Mac. It can run shell commands, edit files, start interactive terminal sessions, manage long-running jobs, read stored Codex threads without starting another Codex model turn, and optionally operate your real logged-in Chrome tabs **in the background without stealing focus**.
+Mac Developer Bridge turns a ChatGPT conversation into the reasoning layer for your actual Mac. It can run shell commands, edit files, start interactive terminal sessions, manage long-running jobs, read stored Codex threads without starting another Codex model turn, and optionally operate a configured Chrome profile **in the background without stealing focus**.
 
 ![Mac Developer Bridge showing ChatGPT reasoning through MCP into shell, PTY sessions, Codex history, and a live Mac](docs/assets/mac-developer-bridge-workflow.png)
 
@@ -40,7 +40,7 @@ The bridge itself makes no OpenAI model call. It exposes deterministic local too
 - Keep interactive shells and terminal programs alive through a real PTY instead of pretending stdin is a terminal.
 - Start long-running local jobs, inspect their logs later, and stop the whole process group.
 - Read and modify files anywhere your macOS user can access.
-- Optionally operate approved pages in your real logged-in Chrome profile without bringing Chrome to the foreground.
+- Optionally operate approved pages in a configured Chrome profile without bringing Chrome to the foreground.
 
 This is intentionally different from a local coding agent. There is no second reasoning loop. ChatGPT remains the agent; the Mac is the execution environment.
 
@@ -130,7 +130,7 @@ Git, package managers, Vercel CLI, database CLIs, AppleScript, browser CLIs, bui
 | `browser_cdp_events` | Drain Browser Harness CDP events |
 | `chrome_workspace_status` | Inspect the extension-owned `MDB` Chrome group and reusable background-tab pool; no website grant required |
 | `chrome_workspace_setup` | Create or expand the `MDB` pool once while Chrome is already foreground |
-| `chrome_tabs` | List tabs in the real signed-in Chrome profile without activating Chrome; scoped only when Strict approvals is on |
+| `chrome_tabs` | List tabs in the configured Chrome profile without activating Chrome; scoped only when Strict approvals is on |
 | `chrome_open` | Lease an idle tab from the persistent `MDB` group and open a URL without creating a new tab |
 | `chrome_navigate` | Navigate an approved tab without selecting it |
 | `chrome_snapshot` | Read visible text and interactive elements from an approved tab |
@@ -184,15 +184,21 @@ See [`docs/DESKTOP_CONTROL.md`](docs/DESKTOP_CONTROL.md) for the complete native
 
 ### Background Chrome without stealing focus
 
-On macOS, the optional Background Browser integration operates the **same signed-in Chrome profile you already use**, so existing website sessions work, but routine automation happens through a small local extension instead of AppleScript UI automation or Chrome DevTools Protocol page selection. The native host is bound at install time to the selected Chrome profile/account and refuses a signed-out or mismatched profile.
+On macOS, the optional Background Browser integration operates one **explicitly selected Chrome profile**, while routine automation happens through a small local extension instead of AppleScript UI automation or Chrome DevTools Protocol page selection. A normal signed-in profile is pinned to its email/Gaia identity. An intentionally isolated, signed-out profile can instead be selected explicitly as `dedicated-local`; that mode is useful when browser state should be kept separate from the operator's everyday profile.
 
 This is intentionally opt-in because authenticated browser control is powerful. Install the native host once, then load the unpacked extension once in Chrome:
 
 ```bash
+# Recommended for an isolated profile; accepts the Chrome display name or directory.
+./scripts/install-background-chrome.sh --profile 'Dedicated MDB'
+
+# Without --profile, MDB uses Chrome's last-used profile and requires it to be signed in.
 ./scripts/install-background-chrome.sh
 ```
 
-Then in Chrome open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select this repository's `chrome-extension/` directory. The expected extension id is `pcebfblnmcappinbenkmddjdapaoajgm`.
+Then open **that selected profile** in Chrome, visit `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select this repository's `chrome-extension/` directory. The expected extension id is `pcebfblnmcappinbenkmddjdapaoajgm`. Do not load the MDB extension into other profiles when using `dedicated-local` mode. The installer never silently falls back from an explicitly selected or last-used signed-out profile to another signed-in profile.
+
+The native-messaging runtime itself is copied into `$DATA_DIR/chrome-native-host.mjs` and launched from Application Support. This avoids making Chrome the TCC-responsible process for executable source files stored under protected folders such as `~/Documents`; the repository remains the source of truth, and rerunning the installer refreshes the installed copy.
 
 The extension keeps a Chrome-native tab group named **`MDB`**. By default it contains four extension-owned idle tabs. They are created only while Chrome is already foreground, then leased and reused for routine work. The group is collapsed when idle and expands while one or more tabs are leased. This mirrors the managed-group approach used by browser-agent extensions while avoiding a macOS/Chrome quirk measured on this project: even `chrome.tabs.create({ active:false })` can bring Chrome to the foreground.
 
@@ -200,7 +206,7 @@ The pool now self-heals. If Chrome or the extension restarts and the `MDB` group
 
 `chrome_workspace_status` is grantless because it only reads extension-owned local workspace state. `chrome_workspace_setup` is also grantless because it creates only extension-owned idle pages; it refuses to create or expand the pool unless Chrome is already focused rather than stealing focus itself. Legacy/internal `tabs.open` callers are routed to the same `workspace.open` lease path, so they cannot create loose tabs outside `MDB`; if the pool is unavailable while Chrome is background, the open fails closed until the group can be repaired.
 
-**Relaxed access is the default.** Normal HTTP/HTTPS work through the signed-in `MDB` Chrome profile does not require a terminal approval command or per-site allowlist. This is intentional: Mac Developer Bridge already exposes unrestricted shell/file authority as the logged-in macOS user, and the useful default is for browser execution to match that operator-chosen trust level while remaining background-first.
+**Relaxed access is the default.** Normal HTTP/HTTPS work through the configured `MDB` Chrome profile does not require a terminal approval command or per-site allowlist. This is intentional: Mac Developer Bridge already exposes unrestricted shell/file authority as the logged-in macOS user, and the useful default is for browser execution to match that operator-chosen trust level while remaining background-first.
 
 Relaxed approval does **not** relax Chrome routing. Direct Chrome control through `shell_exec`/`shell_start` — AppleScript, JXA, direct Chrome executable launches, or shell `open` of an HTTP/HTTPS URL (including `open -g`) — is always refused with `CHROME_BACKGROUND_REQUIRED`, in both Relaxed and Strict modes. Browser work must use the `chrome_*` tools and the managed `MDB` group. This keeps the no-focus-stealing behavior structural instead of depending on which approval mode is selected.
 
@@ -221,7 +227,7 @@ A normal workflow is:
 3. `chrome_fill` / `chrome_click` / `chrome_navigate` as needed.
 4. `chrome_close` to return the workspace tab to its idle extension page and release the lease.
 
-Profile binding is always enforced. In relaxed mode the extension permits normal HTTP/HTTPS sites without a per-site grant. In Strict mode, each `chrome-background` approval is stored as its own mode-0600 file under `$DATA_DIR/chrome-background-grants/`, expires after at most 15 minutes, and is merged with other still-live approvals. Expired files are pruned automatically and URL patterns are enforced inside Chrome. Federated personal-browser providers keep their separate single-use behavior.
+Profile binding is always enforced. Signed-in mode pins the reported email and Gaia id. `dedicated-local` mode requires the extension to remain signed out and relies on loading the unpacked extension only in the explicitly selected profile; Chrome's extension identity API does not expose the profile directory/name, so this is an operational isolation rule rather than a same-user security boundary. If the dedicated profile is later signed in, the host refuses it until the installer is rerun. In relaxed mode the extension permits normal HTTP/HTTPS sites without a per-site grant, including explicit ports such as local development servers. In Strict mode, each `chrome-background` approval is stored as its own mode-0600 file under `$DATA_DIR/chrome-background-grants/`, expires after at most 15 minutes, and is merged with other still-live approvals. Expired files are pruned automatically and URL patterns are enforced inside Chrome. Federated personal-browser providers keep their separate single-use behavior.
 
 What background mode does **not** promise: CAPTCHAs, native browser/OS permission dialogs, file pickers, downloads requiring a trusted user gesture, passkeys, and other browser security UI may require a foreground/manual step. The bridge reports that limitation rather than silently activating Chrome. This is also deliberately narrower than arbitrary page JavaScript or network-header capture; see [SECURITY.md](SECURITY.md).
 
@@ -248,12 +254,12 @@ MDB talks directly to an **already-running Browser Harness daemon** over its sam
 
 For native macOS apps, MDB still **prefers** background-capable APIs or web paths because Accessibility automation can require the target application to become frontmost. The dedicated `ui_*` surface now provides a structured path when native foreground interaction is genuinely necessary.
 
-Chrome web-page work should still use the signed-in `MDB` background group whenever possible. Direct Chrome AppleScript/JXA and shell `open` routing remain blocked by `shell_exec`/`shell_start`. The native `ui_*` surface is intentionally broader in this private full-control line, however: it can interact with a foreground Chrome window when browser security UI or another OS-level surface cannot be handled by the background extension. That is a deliberate capability expansion, not a no-focus-stealing guarantee.
+Chrome web-page work should still use the configured `MDB` background group whenever possible. Direct Chrome AppleScript/JXA and shell `open` routing remain blocked by `shell_exec`/`shell_start`. The native `ui_*` surface is intentionally broader in this private full-control line, however: it can interact with a foreground Chrome window when browser security UI or another OS-level surface cannot be handled by the background extension. That is a deliberate capability expansion, not a no-focus-stealing guarantee.
 
 Prefer, in order:
 
 1. an API or MCP connector for the service;
-2. the service's web app through the signed-in `MDB` Chrome group;
+2. the service's web app through the configured `MDB` Chrome group;
 3. semantic native `ui_tree` / `ui_action` operations;
 4. screenshot + mouse/keyboard fallback only when foreground interaction is genuinely required.
 
