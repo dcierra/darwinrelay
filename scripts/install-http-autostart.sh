@@ -40,7 +40,9 @@ sed \
 chmod 600 "$PLIST"
 
 app_running=0
-ps -ax -o command= | grep -Fxq "$APP_EXE" && app_running=1
+if ps -axo command= | awk '{ exe=$1; n=split(exe, part, "/"); if (part[n] == "MacDevBridge") found=1 } END { exit(found ? 0 : 1) }'; then
+  app_running=1
+fi
 case "$LOAD_NOW" in
   0|false|no) should_load=0 ;;
   1|true|yes) should_load=1 ;;

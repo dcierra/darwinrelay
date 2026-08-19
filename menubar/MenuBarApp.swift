@@ -12,6 +12,7 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import Darwin
 
 // MARK: - Paths and shell resolution
 
@@ -98,6 +99,48 @@ struct Paths {
 }
 
 let fullAccessAck = "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS"
+
+/// Process-level single-instance guard for the menu app. The lock is acquired
+/// before reclaimOrphans() touches shared pidfiles or the full-access latch.
+/// A second `open -n`, launchd race, or accidental double-click therefore cannot
+/// stop transport processes owned by the already-running instance.
+final class MenuBarInstanceLock {
+    private var fd: Int32 = -1
+
+    static func acquire() -> MenuBarInstanceLock? {
+        let fm = FileManager.default
+        do {
+            try fm.createDirectory(atPath: Paths.dataDir, withIntermediateDirectories: true)
+        } catch {
+            NSLog("MacDevBridge: cannot create data directory for instance lock: %@", error.localizedDescription)
+            return nil
+        }
+        let lock = MenuBarInstanceLock()
+        let path = Paths.dataDir + "/menubar.lock"
+        lock.fd = Darwin.open(path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+        guard lock.fd >= 0 else {
+            NSLog("MacDevBridge: cannot open instance lock %@ (errno=%d)", path, errno)
+            return nil
+        }
+        guard flock(lock.fd, LOCK_EX | LOCK_NB) == 0 else {
+            Darwin.close(lock.fd)
+            lock.fd = -1
+            return nil
+        }
+        _ = fchmod(lock.fd, S_IRUSR | S_IWUSR)
+        _ = ftruncate(lock.fd, 0)
+        let pidLine = "\(getpid())\n"
+        _ = pidLine.withCString { ptr in write(lock.fd, ptr, strlen(ptr)) }
+        return lock
+    }
+
+    deinit {
+        if fd >= 0 {
+            _ = flock(fd, LOCK_UN)
+            Darwin.close(fd)
+        }
+    }
+}
 
 /// A named Cloudflare tunnel, if one is configured.
 ///
@@ -265,6 +308,7 @@ enum BridgeState {
 
 final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
+    private var instanceLock: MenuBarInstanceLock?
     private let menu = NSMenu()
 
     private var httpProcess: Process?
@@ -401,6 +445,13 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard let lock = MenuBarInstanceLock.acquire() else {
+            NSLog("MacDevBridge: another menu-bar instance already owns the runtime; exiting without touching shared state")
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+            return
+        }
+        instanceLock = lock
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         buildMenu()
         menu.delegate = self
@@ -451,6 +502,9 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // A duplicate instance never acquires the lock and must not touch the
+        // shared transport on its way out. Only the lock owner performs cleanup.
+        guard instanceLock != nil else { return }
         stopBridge(blocking: true)
         // Sweep by pidfile as well. After a menu Stop the process refs are already
         // nil, so the blocking stop above has nothing to escalate — but a draining

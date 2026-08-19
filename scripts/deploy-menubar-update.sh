@@ -6,13 +6,19 @@ APP_DIR="${MAC_DEV_BRIDGE_APP_INSTALL_DIR:-/Applications}"
 APP="$APP_DIR/MacDevBridge.app"
 ROLLBACK="$APP_DIR/.MacDevBridge.app.rollback"
 
-pid_for() {
-  pgrep -f "$1" | head -1 || true
+pid_for_process_name() {
+  local name="$1"
+  ps -axo pid=,command= | awk -v name="$name" '{ pid=$1; exe=$2; n=split(exe, part, "/"); if (part[n] == name) { print pid; exit } }'
 }
 
-before_menu="$(pid_for "^$APP/Contents/MacOS/MacDevBridge$")"
-before_http="$(pid_for "$ROOT/mcp-http.mjs$")"
-before_cf="$(pid_for 'cloudflared tunnel .*run')"
+pid_for_command_contains() {
+  local needle="$1"
+  ps -axo pid=,command= | awk -v needle="$needle" 'index($0, needle) { print $1; exit }'
+}
+
+before_menu="$(pid_for_process_name MacDevBridge)"
+before_http="$(pid_for_command_contains "$ROOT/mcp-http.mjs")"
+before_cf="$(pid_for_command_contains "cloudflared tunnel")"
 
 MAC_DEV_BRIDGE_INSTALL_APP=1 \
 MAC_DEV_BRIDGE_APP_INSTALL_DIR="$APP_DIR" \
@@ -22,9 +28,9 @@ codesign --verify --deep --strict "$APP"
 helper_status="$($APP/Contents/Helpers/MacUIHelper status <<<'{}')"
 printf '%s\n' "$helper_status" | grep -q '"ok":true'
 
-after_menu="$(pid_for "^$APP/Contents/MacOS/MacDevBridge$")"
-after_http="$(pid_for "$ROOT/mcp-http.mjs$")"
-after_cf="$(pid_for 'cloudflared tunnel .*run')"
+after_menu="$(pid_for_process_name MacDevBridge)"
+after_http="$(pid_for_command_contains "$ROOT/mcp-http.mjs")"
+after_cf="$(pid_for_command_contains "cloudflared tunnel")"
 
 check_pid_unchanged() {
   local name="$1" before="$2" after="$3"
