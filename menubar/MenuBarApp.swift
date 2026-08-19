@@ -263,7 +263,7 @@ enum BridgeState {
     case failed(String)
 }
 
-final class Controller: NSObject, NSApplicationDelegate {
+final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let menu = NSMenu()
 
@@ -296,6 +296,9 @@ final class Controller: NSObject, NSApplicationDelegate {
     private let startStopItem = NSMenuItem(title: "Start", action: nil, keyEquivalent: "")
     private let strictApprovalsItem = NSMenuItem(title: "Strict approvals", action: nil, keyEquivalent: "")
     private let desktopPermissionsItem = NSMenuItem(title: "Desktop: checking permissions…", action: nil, keyEquivalent: "")
+    private var desktopPermissionCache: (ax: Bool, screen: Bool, input: Bool)?
+    private var fdaPermissionCache: Bool?
+    private var desktopPermissionRefreshInFlight = false
 
     /// Reclaim anything a previous instance left behind.
     ///
@@ -400,6 +403,7 @@ final class Controller: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         buildMenu()
+        menu.delegate = self
         statusItem.menu = menu
 
         reclaimOrphans()
@@ -420,6 +424,7 @@ final class Controller: NSObject, NSApplicationDelegate {
         }
 
         render()
+        refreshDesktopPermissions()
         let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
             self?.poll()
         }
@@ -568,13 +573,11 @@ final class Controller: NSObject, NSApplicationDelegate {
         strictApprovalsItem.state = OperatorSettingsStore.strictApprovals() ? .on : .off
         strictApprovalsItem.title = "Strict approvals"
 
-        let helperPermissions = desktopHelperPermissions()
-        let fda = fullDiskAccessGranted()
         func mark(_ granted: Bool?) -> String {
             guard let granted else { return "?" }
             return granted ? "✓" : "✗"
         }
-        desktopPermissionsItem.title = "Desktop: AX \(mark(helperPermissions?.ax)) · Screen \(mark(helperPermissions?.screen)) · Input \(mark(helperPermissions?.input)) · FDA \(mark(fda))"
+        desktopPermissionsItem.title = "Desktop: AX \(mark(desktopPermissionCache?.ax)) · Screen \(mark(desktopPermissionCache?.screen)) · Input \(mark(desktopPermissionCache?.input)) · FDA \(mark(fdaPermissionCache))"
     }
 
     // MARK: Actions
@@ -679,6 +682,27 @@ final class Controller: NSObject, NSApplicationDelegate {
         render()
     }
 
+    func menuWillOpen(_ menu: NSMenu) {
+        refreshDesktopPermissions()
+    }
+
+    private func refreshDesktopPermissions() {
+        guard !desktopPermissionRefreshInFlight else { return }
+        desktopPermissionRefreshInFlight = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let helper = self.desktopHelperPermissions()
+            let fda = self.fullDiskAccessGranted()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.desktopPermissionCache = helper
+                self.fdaPermissionCache = fda
+                self.desktopPermissionRefreshInFlight = false
+                self.render()
+            }
+        }
+    }
+
     private func desktopHelperPermissions() -> (ax: Bool, screen: Bool, input: Bool)? {
         guard FileManager.default.isExecutableFile(atPath: Paths.uiHelper) else { return nil }
         let process = Process()
@@ -722,7 +746,7 @@ final class Controller: NSObject, NSApplicationDelegate {
             stdin.fileHandleForWriting.write(Data("{\"request\":true}\n".utf8))
             try? stdin.fileHandleForWriting.close()
             process.waitUntilExit()
-            DispatchQueue.main.async { [weak self] in self?.render() }
+            DispatchQueue.main.async { [weak self] in self?.refreshDesktopPermissions() }
         }
     }
 
