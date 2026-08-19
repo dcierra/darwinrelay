@@ -958,6 +958,20 @@ func performSequence(_ input: [String: Any]) async throws -> [String: Any] {
     ]
 }
 
+func desktopPermissionDictionary(request: Bool) -> [String: Any] {
+    if request {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+        _ = CGRequestScreenCaptureAccess()
+        _ = CGRequestPostEventAccess()
+    }
+    return [
+        "accessibilityTrusted": AXIsProcessTrusted(),
+        "screenRecordingGranted": CGPreflightScreenCaptureAccess(),
+        "postEventsGranted": CGPreflightPostEventAccess(),
+    ]
+}
+
 @main
 struct MacUIHelper {
     static func main() async {
@@ -972,16 +986,17 @@ struct MacUIHelper {
             switch command {
             case "status":
                 let frontmost = NSWorkspace.shared.frontmostApplication
-                result = [
-                    "helperVersion": "1.1.0",
-                    "pid": ProcessInfo.processInfo.processIdentifier,
-                    "macOS": ProcessInfo.processInfo.operatingSystemVersionString,
-                    "accessibilityTrusted": AXIsProcessTrusted(),
-                    "screenRecordingGranted": CGPreflightScreenCaptureAccess(),
-                    "postEventsGranted": CGPreflightPostEventAccess(),
-                    "frontmostApplication": frontmost.map(runningAppDictionary) ?? NSNull(),
-                    "displays": displayDictionaries(),
-                ]
+                var status = desktopPermissionDictionary(request: false)
+                status["helperVersion"] = "1.2.0"
+                status["pid"] = ProcessInfo.processInfo.processIdentifier
+                status["macOS"] = ProcessInfo.processInfo.operatingSystemVersionString
+                status["frontmostApplication"] = frontmost.map(runningAppDictionary) ?? NSNull()
+                status["displays"] = displayDictionaries()
+                result = status
+            case "permissions":
+                var permissions = desktopPermissionDictionary(request: boolValue(input, "request", default: false))
+                permissions["helperVersion"] = "1.2.0"
+                result = permissions
             case "apps":
                 let apps = NSWorkspace.shared.runningApplications
                     .filter { $0.activationPolicy != .prohibited || boolValue(input, "include_background", default: false) }

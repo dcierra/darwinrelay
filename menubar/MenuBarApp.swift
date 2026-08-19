@@ -73,6 +73,8 @@ struct Paths {
     }()
 
     static var frontEnd: String { packageDir + "/mcp-http.mjs" }
+    static var uiHelper: String { Bundle.main.bundlePath + "/Contents/Helpers/MacUIHelper" }
+    static var uiCursorHelper: String { Bundle.main.bundlePath + "/Contents/Helpers/MacUICursorOverlay" }
 
     static let dataDir: String = {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -566,12 +568,13 @@ final class Controller: NSObject, NSApplicationDelegate {
         strictApprovalsItem.state = OperatorSettingsStore.strictApprovals() ? .on : .off
         strictApprovalsItem.title = "Strict approvals"
 
-        let ax = AXIsProcessTrusted()
-        let screen = CGPreflightScreenCaptureAccess()
-        let input = CGPreflightPostEventAccess()
+        let helperPermissions = desktopHelperPermissions()
         let fda = fullDiskAccessGranted()
-        func mark(_ granted: Bool) -> String { granted ? "✓" : "✗" }
-        desktopPermissionsItem.title = "Desktop: AX \(mark(ax)) · Screen \(mark(screen)) · Input \(mark(input)) · FDA \(mark(fda))"
+        func mark(_ granted: Bool?) -> String {
+            guard let granted else { return "?" }
+            return granted ? "✓" : "✗"
+        }
+        desktopPermissionsItem.title = "Desktop: AX \(mark(helperPermissions?.ax)) · Screen \(mark(helperPermissions?.screen)) · Input \(mark(helperPermissions?.input)) · FDA \(mark(fda))"
     }
 
     // MARK: Actions
@@ -676,6 +679,53 @@ final class Controller: NSObject, NSApplicationDelegate {
         render()
     }
 
+    private func desktopHelperPermissions() -> (ax: Bool, screen: Bool, input: Bool)? {
+        guard FileManager.default.isExecutableFile(atPath: Paths.uiHelper) else { return nil }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: Paths.uiHelper)
+        process.arguments = ["permissions"]
+        let stdin = Pipe()
+        let stdout = Pipe()
+        process.standardInput = stdin
+        process.standardOutput = stdout
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return nil }
+        stdin.fileHandleForWriting.write(Data("{\"request\":false}\n".utf8))
+        try? stdin.fileHandleForWriting.close()
+        let data = stdout.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["ok"] as? Bool == true,
+              let result = object["result"] as? [String: Any],
+              let ax = result["accessibilityTrusted"] as? Bool,
+              let screen = result["screenRecordingGranted"] as? Bool,
+              let input = result["postEventsGranted"] as? Bool
+        else { return nil }
+        return (ax, screen, input)
+    }
+
+    private func requestDesktopHelperPermissions() {
+        guard FileManager.default.isExecutableFile(atPath: Paths.uiHelper) else {
+            notify("Desktop helper missing", Paths.uiHelper)
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: Paths.uiHelper)
+            process.arguments = ["permissions"]
+            let stdin = Pipe()
+            process.standardInput = stdin
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            guard (try? process.run()) != nil else { return }
+            stdin.fileHandleForWriting.write(Data("{\"request\":true}\n".utf8))
+            try? stdin.fileHandleForWriting.close()
+            process.waitUntilExit()
+            DispatchQueue.main.async { [weak self] in self?.render() }
+        }
+    }
+
     private func fullDiskAccessGranted() -> Bool {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let probe = URL(fileURLWithPath: home + "/Library/Application Support/com.apple.TCC/TCC.db")
@@ -690,6 +740,7 @@ final class Controller: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openDesktopPermissions() {
+        requestDesktopHelperPermissions()
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else { return }
         NSWorkspace.shared.open(url)
     }
@@ -812,6 +863,8 @@ final class Controller: NSObject, NSApplicationDelegate {
         env["MAC_DEV_BRIDGE_LOG_DIR"] = Paths.logDir
         env["MAC_DEV_BRIDGE_UNLOCK_FILE"] = Paths.unlockFile
         env["MAC_DEV_BRIDGE_OAUTH_CLIENT_ID"] = clientId
+        env["MAC_DEV_BRIDGE_UI_HELPER"] = Paths.uiHelper
+        env["MAC_DEV_BRIDGE_UI_CURSOR_HELPER"] = Paths.uiCursorHelper
         if let publicURL { env["MAC_DEV_BRIDGE_PUBLIC_URL"] = publicURL }
         // Never inherit the env-var form of the acknowledgement. bridge.mjs treats it as
         // a standing unlock, so a bridge started with it set cannot be revoked by

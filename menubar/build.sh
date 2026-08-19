@@ -13,6 +13,10 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 PACKAGE_DIR="$(cd "$HERE/.." && pwd -P)"
 APP="$PACKAGE_DIR/MacDevBridge.app"
 NAME="MacDevBridge"
+INSTALL_APP="${MAC_DEV_BRIDGE_INSTALL_APP:-1}"
+source "$PACKAGE_DIR/scripts/codesign-runtime.sh"
+SIGN_ID="$(mdb_codesign_identity)"
+if [[ -n "$SIGN_ID" ]]; then export MAC_DEV_BRIDGE_SIGN_IDENTITY="$SIGN_ID"; fi
 
 command -v swiftc >/dev/null || { echo "swiftc not found. Install the Xcode Command Line Tools: xcode-select --install" >&2; exit 69; }
 
@@ -38,7 +42,9 @@ if pgrep -f "$APP/Contents/MacOS/$NAME" >/dev/null 2>&1; then
 fi
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"
+cp -p "$PACKAGE_DIR/bin/MacUIHelper" "$APP/Contents/Helpers/MacUIHelper"
+cp -p "$PACKAGE_DIR/bin/MacUICursorOverlay" "$APP/Contents/Helpers/MacUICursorOverlay"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -48,8 +54,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>$NAME</string>
   <key>CFBundleDisplayName</key><string>Mac Developer Bridge</string>
   <key>CFBundleIdentifier</key><string>local.mac-developer-bridge.menubar</string>
-  <key>CFBundleVersion</key><string>0.5.0</string>
-  <key>CFBundleShortVersionString</key><string>0.5.0</string>
+  <key>CFBundleVersion</key><string>0.5.1</string>
+  <key>CFBundleShortVersionString</key><string>0.5.1</string>
   <key>CFBundleExecutable</key><string>$NAME</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
@@ -76,52 +82,30 @@ swiftc -O \
 
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
-# Sign with a real identity when one exists, because it changes what macOS TCC
-# keys the Full Disk Access grant on.
-#
-# An ad-hoc signature ("--sign -") has no team identifier, so the designated
-# requirement is the cdhash — which changes on every rebuild. macOS then sees a
-# different program and the FDA grant stops applying, silently, until the operator
-# removes and re-adds the bundle. A Developer ID / Apple Development identity keys the
-# requirement on identifier + team, so rebuilds preserve the grant.
-SIGN_ID="${MAC_DEV_BRIDGE_SIGN_IDENTITY:-}"
-if [ -z "$SIGN_ID" ]; then
-  # First valid codesigning identity, if the keychain has one.
-  SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
-    | awk '/\) [0-9A-F]{40} "/ {print $2; exit}')"
-fi
-
-if [ -n "$SIGN_ID" ] && codesign --force --options runtime --sign "$SIGN_ID" "$APP" >/dev/null 2>&1; then
-  echo "  signed with identity $SIGN_ID (stable across rebuilds)"
-elif codesign --force --sign - "$APP" >/dev/null 2>&1; then
-  cat <<'ADHOC'
-  signed ad-hoc — no codesigning identity found.
-  NOTE: an ad-hoc signature changes identity on every rebuild, so macOS may drop the
-  Full Disk Access grant after each build. If protected paths start failing with
-  EPERM, remove and re-add the app under System Settings -> Privacy & Security ->
-  Full Disk Access, then Stop and Start it.
-ADHOC
-else
-  echo "note: codesign failed entirely; the app still runs locally"
-fi
+# Sign the outer app with the SAME identity already used for both nested helpers.
+# The helpers are copied before this step so the bundle seal covers their stable
+# designated requirements too.
+mdb_sign_runtime "$APP" "local.mac-developer-bridge.menubar" "$SIGN_ID"
+codesign --verify --deep --strict "$APP" >/dev/null
 
 # Install a copy where the user will actually look for it. Launchpad and Spotlight
 # do not surface apps living in ~/Downloads, which is where this one was stranded.
 INSTALLED=""
-for dest in /Applications "$HOME/Applications"; do
-  [ -d "$dest" ] || mkdir -p "$dest" 2>/dev/null || continue
-  if rm -rf "$dest/$NAME.app" 2>/dev/null && cp -R "$APP" "$dest/" 2>/dev/null; then
-    # Preserve the signature created above. Re-signing the installed copy ad-hoc
-    # changed its designated requirement/cdhash and defeated the whole purpose of
-    # using a real Apple Development / Developer ID identity for stable TCC grants.
-    codesign --verify --deep --strict "$dest/$NAME.app" >/dev/null 2>&1 || {
-      echo "warning: installed app signature verification failed: $dest/$NAME.app" >&2
-      continue
-    }
-    INSTALLED="$dest/$NAME.app"
-    break
-  fi
-done
+if [[ "$INSTALL_APP" != "0" ]]; then
+  for dest in /Applications "$HOME/Applications"; do
+    [ -d "$dest" ] || mkdir -p "$dest" 2>/dev/null || continue
+    if rm -rf "$dest/$NAME.app" 2>/dev/null && cp -R "$APP" "$dest/" 2>/dev/null; then
+      # Preserve the signature created above. Re-signing the installed copy ad-hoc
+      # changes its designated requirement/cdhash and invalidates TCC grants.
+      codesign --verify --deep --strict "$dest/$NAME.app" >/dev/null 2>&1 || {
+        echo "warning: installed app signature verification failed: $dest/$NAME.app" >&2
+        continue
+      }
+      INSTALLED="$dest/$NAME.app"
+      break
+    fi
+  done
+fi
 
 cat <<OUT
 

@@ -176,7 +176,7 @@ Build/check the native pieces without installing the menu-bar app:
 ./scripts/desktop-doctor.sh
 ```
 
-macOS TCC remains authoritative. The helper never edits TCC; Accessibility, Screen Recording and permission to post synthetic input events are checked independently. The menu-bar app displays AX/Screen/Input/FDA readiness. Text supplied to `ui_keyboard`, `ui_clipboard_write`, and AX `set_value` is never written verbatim to the MDB audit log.
+macOS TCC remains authoritative. The signed `MacUIHelper` never edits TCC; Accessibility, Screen Recording and permission to post synthetic input events are checked independently. Production builds embed the helper and virtual cursor under `MacDevBridge.app/Contents/Helpers`, sign all three executables with one stable code-signing identity, and route the bridge to those exact nested binaries. The menu-bar AX/Screen/Input indicators are read from the real helper process rather than from the menu app, so they reflect the code that actually controls the desktop. Clicking the Desktop permission row asks macOS to present supported helper permission prompts. Text supplied to `ui_keyboard`, `ui_clipboard_write`, and AX `set_value` is never written verbatim to the MDB audit log.
 
 The helper intentionally remains short-lived: measured startup on the development M4 host was ~50 ms median / ~56 ms p95 after warmup, so a resident daemon would add lifecycle and kill-switch complexity without a material benefit.
 
