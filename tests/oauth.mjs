@@ -582,7 +582,9 @@ try {
   assert.ok(!consentHtml.includes(xssState), "the consent page reflected the state parameter");
   assert.ok(!consentHtml.includes(flow.challenge), "the consent page reflected the code_challenge");
   assert.ok(!consentHtml.includes(TOKEN), "the consent page leaked the bridge token");
-  assert.ok(consentHtml.includes(REDIRECT), "the consent page must show where the code will be sent");
+  const redirectRow = /<dt>Will redirect to<\/dt><dd><code>([^<]*)<\/code><\/dd>/.exec(consentHtml);
+  assert.ok(redirectRow, "the consent page is missing its redirect destination row");
+  assert.equal(redirectRow[1], REDIRECT, "the consent page must show the exact validated redirect destination");
   assert.ok(consentHtml.includes(CLIENT_ID), "the consent page must show the client_id");
   assert.match(consentHtml, /unrestricted shell access/, "the consent page must state what approval grants");
   ok("consent page is script-free, reflects no attacker-controlled parameter, and names the risk");
@@ -1163,6 +1165,15 @@ try {
   });
   assert.equal(badSecret.status, 401);
   assert.equal(badSecret.json.error, "invalid_client");
+  const oversizedSecretFlow = await getCode(alt);
+  const oversizedSecret = await exchange(alt, {
+    code: oversizedSecretFlow.code,
+    code_verifier: oversizedSecretFlow.verifier,
+    redirect_uri: REDIRECT,
+    client_secret: "x".repeat(5000),
+  });
+  assert.equal(oversizedSecret.status, 401);
+  assert.equal(oversizedSecret.json.error, "invalid_client");
   const basicSecretFlow = await getCode(alt);
   const basicSecret = await req(alt, "/token", {
     method: "POST",

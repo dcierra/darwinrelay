@@ -1,6 +1,6 @@
 # Security model
 
-### Self-hosted GitHub Actions runner
+### Public CI and security automation
 
 Public CI runs on isolated GitHub-hosted macOS runners. The repository does not dispatch pull-request code to a maintainer workstation. Real mutable AppKit E2E is a local maintainer check because TCC-dependent GUI input is not a trustworthy assertion on disposable hosted sessions.
 
@@ -20,6 +20,15 @@ This project intentionally exposes unrestricted local capabilities. There is no 
 
 - **OpenAI Secure MCP Tunnel** (`install.sh`): `tunnel-client` makes an outbound HTTPS connection and nothing listens for inbound traffic. Nothing is publicly reachable.
 - **Cloudflare Tunnel + Server URL** (`mcp-http.mjs`): a listener *is* opened. It is pinned to `127.0.0.1`, but `cloudflared` publishes it at a public hostname, so the endpoint is reachable from anywhere and a static bearer token is the only thing in front of unrestricted shell access.
+
+
+## HTTP error disclosure boundary
+
+The public HTTP/OAuth transport treats exception text as local diagnostic data. Request-body transport errors and bridge-child failures may contain process state or filesystem details, so remote responses use fixed status-specific messages while the detailed exception remains in stderr/audit-local diagnostics. Tests kill a real bridge child and assert that the transient 503 does not expose exit codes, local paths or unlock-state details.
+
+## OAuth client-secret comparison
+
+An optional configured OAuth `client_secret` is never persisted. DarwinRelay tags it in memory with HMAC-SHA256 under a fresh random per-process comparison key, then scrubs the original environment value before spawning the bridge. Presented secrets are bounded to 4096 UTF-8 bytes and compared as fixed-length tags with `timingSafeEqual`. This avoids keeping a plain reusable SHA-256(secret) verifier while also avoiding a deliberately expensive password KDF on the public `/token` endpoint, where attacker-controlled repeated requests could otherwise become a CPU denial-of-service primitive.
 
 ## Request limits
 

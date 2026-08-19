@@ -139,11 +139,23 @@ if (!/^[\x21-\x7e]+$/.test(TOKEN)) {
 // granted, an attacker-controlled model could read it back from there. Use
 // DARWINRELAY_HTTP_TOKEN_FILE if that matters to you.
 const TOKEN_DIGEST = crypto.createHash("sha256").update(TOKEN, "latin1").digest();
-// Read the secret before the scrub below removes it, and keep only the digest:
-// a client secret is never persisted and never logged, so this is the only copy.
-const CLIENT_SECRET_DIGEST = process.env.DARWINRELAY_OAUTH_CLIENT_SECRET
-  ? crypto.createHash("sha256").update(process.env.DARWINRELAY_OAUTH_CLIENT_SECRET, "latin1").digest()
-  : null;
+// Read the secret before the scrub below removes it. A plain SHA-256(secret)
+// would be a reusable offline verifier if this in-memory value were ever
+// disclosed. Instead tag the secret with a fresh per-process HMAC key. Nothing
+// is persisted, both tags are fixed-length for timingSafeEqual(), and an online
+// attacker cannot derive a reusable verifier from the tag alone.
+const MAX_CLIENT_SECRET_BYTES = 4096;
+const CLIENT_SECRET_COMPARE_KEY = crypto.randomBytes(32);
+function clientSecretTag(value) {
+  return crypto.createHmac("sha256", CLIENT_SECRET_COMPARE_KEY).update(String(value), "utf8").digest();
+}
+const CLIENT_SECRET_TAG = (() => {
+  const configured = process.env.DARWINRELAY_OAUTH_CLIENT_SECRET || "";
+  if (Buffer.byteLength(configured, "utf8") > MAX_CLIENT_SECRET_BYTES) {
+    die(`DARWINRELAY_OAUTH_CLIENT_SECRET must be at most ${MAX_CLIENT_SECRET_BYTES} bytes.`);
+  }
+  return configured ? clientSecretTag(configured) : null;
+})();
 const CONFIGURED_CLIENT_ID = (process.env.DARWINRELAY_OAUTH_CLIENT_ID || "").trim();
 const CHILD_ENV = { ...process.env };
 delete CHILD_ENV.DARWINRELAY_HTTP_TOKEN;
@@ -212,6 +224,10 @@ function failAllPending(error) {
   pending.clear();
 }
 
+function bridgeFailure(message, status = 503) {
+  return Object.assign(new Error(message), { bridgeHttpStatus: status });
+}
+
 function wireChild(proc) {
   readline.createInterface({ input: proc.stdout, crlfDelay: Infinity }).on("line", (line) => {
     if (!line.trim()) return;
@@ -234,7 +250,7 @@ function wireChild(proc) {
   proc.on("error", (e) => {
     log(`bridge process error: ${e.message}`);
     lastExit = { code: null, signal: null, at: Date.now() };
-    failAllPending(new Error(`bridge process error: ${e.message}`));
+    failAllPending(bridgeFailure(`bridge process error: ${e.message}`));
     if (child === proc) child = null;
   });
 
@@ -244,7 +260,7 @@ function wireChild(proc) {
   proc.stdin.on("error", (e) => {
     log(`bridge stdin error: ${e.message}; discarding this child`);
     lastExit = { code: null, signal: null, at: Date.now() };
-    failAllPending(new Error(`bridge stdin error: ${e.message}`));
+    failAllPending(bridgeFailure(`bridge stdin error: ${e.message}`));
     if (child === proc) child = null;
     try {
       proc.kill("SIGKILL");
@@ -254,7 +270,7 @@ function wireChild(proc) {
   proc.on("exit", (code, signal) => {
     lastExit = { code, signal, at: Date.now() };
     log(`bridge exited code=${code} signal=${signal}; failing ${pending.size} in-flight request(s)`);
-    failAllPending(new Error(`bridge process exited (code=${code} signal=${signal})`));
+    failAllPending(bridgeFailure(`bridge process exited (code=${code} signal=${signal})`));
     if (child === proc) child = null;
   });
 }
@@ -262,7 +278,7 @@ function wireChild(proc) {
 function writeRaw(proc, message) {
   // Writing to an exited child's stdin returns false without throwing or
   // emitting an error, so a waiter registered against it would never settle.
-  if (!alive(proc)) throw new Error("bridge process is not running");
+  if (!alive(proc)) throw bridgeFailure("bridge process is not running");
   proc.stdin.write(`${JSON.stringify(message)}\n`);
 }
 
@@ -271,7 +287,7 @@ function register(serverId, clientId, resolve, reject, timeoutMs, label) {
   const waiter = { clientId };
   const timer = setTimeout(() => {
     if (pending.get(serverId) === waiter) pending.delete(serverId);
-    reject(new Error(`bridge ${label} timed out`));
+    reject(bridgeFailure(`bridge ${label} timed out`, 504));
   }, timeoutMs);
   waiter.resolve = (v) => {
     clearTimeout(timer);
@@ -289,7 +305,7 @@ async function startChild() {
   // A child that dies on startup (missing unlock file, bad entry path) would
   // otherwise be respawned once per inbound request, forever.
   if (lastExit && Date.now() - lastExit.at < RESPAWN_BACKOFF_MS) {
-    throw new Error(
+    throw bridgeFailure(
       `bridge exited immediately (code=${lastExit.code}); not respawning yet. ` +
         `bridge.mjs exits 78 when the full-access unlock file is missing.`,
     );
@@ -862,7 +878,7 @@ async function authorizePost(req, res) {
   try {
     raw = await readBody(req);
   } catch (e) {
-    return send(res, e?.httpStatus || 400, { error: String(e.message || e) });
+    return sendBodyReadFailure(res, e);
   }
   // URLSearchParams, never bare decodeURIComponent: the latter throws on "%zz".
   const form = new URLSearchParams(raw);
@@ -993,7 +1009,7 @@ async function tokenPost(req, res) {
   try {
     raw = await readBody(req);
   } catch (e) {
-    return send(res, e?.httpStatus || 400, { error: String(e.message || e) });
+    return sendBodyReadFailure(res, e);
   }
   const params = parseForm(req, raw);
 
@@ -1005,14 +1021,17 @@ async function tokenPost(req, res) {
     return oauthError(res, 401, "invalid_client", "unknown client_id");
   }
   if (cred.secret) {
-    if (CLIENT_SECRET_DIGEST === null) {
+    if (CLIENT_SECRET_TAG === null) {
       // A secret is optional and must never be REQUIRED, so one that this
       // server was never configured with cannot be a hard failure either --
       // rejecting it would strand a client whose dialog filled the field in.
       log("POST /token presented a client_secret but none is configured; ignoring it");
     } else {
-      const got = crypto.createHash("sha256").update(cred.secret, "latin1").digest();
-      if (!crypto.timingSafeEqual(got, CLIENT_SECRET_DIGEST)) {
+      if (Buffer.byteLength(cred.secret, "utf8") > MAX_CLIENT_SECRET_BYTES) {
+        return oauthError(res, 401, "invalid_client", "client authentication failed");
+      }
+      const got = clientSecretTag(cred.secret);
+      if (!crypto.timingSafeEqual(got, CLIENT_SECRET_TAG)) {
         return oauthError(res, 401, "invalid_client", "client authentication failed");
       }
     }
@@ -1091,7 +1110,7 @@ async function revokePost(req, res) {
   try {
     raw = await readBody(req);
   } catch (e) {
-    return send(res, e?.httpStatus || 400, { error: String(e.message || e) });
+    return sendBodyReadFailure(res, e);
   }
   const token = parseForm(req, raw).get("token");
   if (typeof token === "string" && token) {
@@ -1232,6 +1251,23 @@ function httpError(status, message) {
   return Object.assign(new Error(message), { httpStatus: status });
 }
 
+const PUBLIC_BODY_ERRORS = new Map([
+  [400, "invalid request body"],
+  [408, "request body timed out"],
+  [413, "request body too large"],
+  [503, "server is buffering too much request data; retry shortly"],
+]);
+
+function sendBodyReadFailure(res, error) {
+  const candidate = Number(error?.httpStatus);
+  const status = PUBLIC_BODY_ERRORS.has(candidate) ? candidate : 400;
+  // Detailed exception text belongs only in local diagnostics. Socket errors can
+  // contain local paths or runtime details and must never be serialized to a
+  // remote HTTP caller.
+  log(`request body read failed (${status}): ${String(error?.message || error)}`);
+  return send(res, status, { error: PUBLIC_BODY_ERRORS.get(status) });
+}
+
 // Rate-limited, so the log cannot itself be flooded by the condition it reports.
 function logLimit(message) {
   const now = Date.now();
@@ -1293,7 +1329,10 @@ function readBody(req) {
     });
     req.on("end", () => settle(resolve, Buffer.concat(chunks).toString("utf8")));
     // A transport failure is not a payload problem; 400 rather than the old 413.
-    req.on("error", (e) => settle(reject, e?.httpStatus ? e : httpError(400, String(e?.message || e))));
+    req.on("error", (e) => {
+      logLimit(`request body transport error: ${String(e?.message || e)}`);
+      settle(reject, e?.httpStatus ? e : httpError(400, "request body transport error"));
+    });
     req.on("aborted", () => settle(reject, httpError(400, "request aborted")));
   });
 }
@@ -1411,7 +1450,7 @@ async function handle(req, res) {
   try {
     raw = await readBody(req);
   } catch (e) {
-    return send(res, e?.httpStatus || 400, { error: String(e.message || e) });
+    return sendBodyReadFailure(res, e);
   }
 
   let msg;
@@ -1447,12 +1486,15 @@ async function handle(req, res) {
     if (reply === null) return sendEmpty(res, 202); // notification accepted
     return wantsEventStream(req) ? sendEventStream(res, reply) : send(res, 200, reply);
   } catch (e) {
-    const message = String(e?.message || e);
-    log(`request failed: ${message}`);
-    // Child-unavailable conditions are transient; tell the client so rather
-    // than reporting a generic internal error.
-    const status = /exited|not running/.test(message) ? 503 : 500;
-    return send(res, status, { jsonrpc: "2.0", id: clientId, error: { code: -32603, message } });
+    const internalMessage = String(e?.message || e);
+    log(`request failed: ${internalMessage}`);
+    const status = e?.bridgeHttpStatus === 503 || e?.bridgeHttpStatus === 504 ? e.bridgeHttpStatus : 500;
+    const publicMessage = status === 503
+      ? "bridge temporarily unavailable"
+      : status === 504
+        ? "bridge request timed out"
+        : "internal error";
+    return send(res, status, { jsonrpc: "2.0", id: clientId, error: { code: -32603, message: publicMessage } });
   }
 }
 

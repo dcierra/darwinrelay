@@ -38,7 +38,10 @@ async function verifyRefusesToStart(token, expected, extraEnv = {}) {
 await verifyRefusesToStart("", /Refusing to start without auth/);
 await verifyRefusesToStart("too-short", /at least 24 bytes/);
 await verifyRefusesToStart("ü".repeat(30), /printable ASCII/);
-console.log("  PASS  refuses to start without a usable bearer token");
+await verifyRefusesToStart(TOKEN, /OAUTH_CLIENT_SECRET must be at most 4096 bytes/, {
+  DARWINRELAY_OAUTH_CLIENT_SECRET: "x".repeat(4097),
+});
+console.log("  PASS  refuses to start without a usable bearer token or bounded OAuth client secret");
 
 // The token-file path must honour the same exit-78 contract, not surface a raw
 // ENOENT stack with exit 1.
@@ -249,7 +252,17 @@ try {
     `pid ${bridgePid} is not a child of the server under test (parent ${actualParent}, expected ${server.pid}); refusing to kill`,
   );
   process.kill(bridgePid, "SIGKILL");
-  await new Promise((r) => setTimeout(r, 2400)); // clear RESPAWN_BACKOFF_MS
+  await new Promise((r) => setTimeout(r, 100));
+  const unavailable = await rpc({ jsonrpc: "2.0", id: 41, method: "ping" });
+  const unavailableText = await unavailable.text();
+  assert.equal(unavailable.status, 503, `expected a transient 503 during bridge respawn backoff, got ${unavailable.status}`);
+  assert.match(unavailableText, /bridge temporarily unavailable/);
+  assert.doesNotMatch(
+    unavailableText,
+    /code=|signal=|FULL_ACCESS|bridge\.mjs|MacDeveloperBridge|DarwinRelay\/|Users\//,
+    `internal bridge detail leaked to the HTTP client: ${unavailableText}`,
+  );
+  await new Promise((r) => setTimeout(r, 2300)); // clear RESPAWN_BACKOFF_MS
   const afterKill = await (
     await rpc({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "shell_exec", arguments: { command: "printf survived" } } })
   ).json();
