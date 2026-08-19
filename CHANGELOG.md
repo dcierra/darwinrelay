@@ -4,6 +4,8 @@ All notable public DarwinRelay changes will be documented here.
 
 ## Unreleased
 
+## 0.6.2 — 2026-08-19
+
 - Fixed `menubar/build.sh --build-only` so it genuinely performs a no-install build; lifecycle coverage now verifies the requested app version explicitly instead of relying on a non-fatal shell comparison.
 - Redesigned the macOS menu bar around an explicit `DarwinRelay · v<version>` header, health summary, concise transport/desktop/safety status rows, and grouped Connection/Diagnostics submenus; menu action enablement is now deterministic instead of relying on AppKit auto-enable heuristics.
 - Split Swift CodeQL into a path-filtered workflow: `main` re-analysis now runs only when Swift/SwiftPM analysis inputs change, while weekly/manual full scans remain available. Added dedicated JavaScript and Swift CodeQL badges and documented the policy for coding agents.
