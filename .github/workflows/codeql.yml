@@ -51,10 +51,8 @@ jobs:
         with:
           languages: swift
           build-mode: manual
-      - name: Compile DarwinRelay native targets
-        run: |
-          DARWINRELAY_INSTALL_APP=0 ./menubar/build.sh
-          ./scripts/build-desktop-fixture.sh
+      - name: Compile DarwinRelay native targets for analysis
+        run: ./scripts/codeql-swift-build.sh
       - name: Analyze Swift
         uses: github/codeql-action/analyze@v4
         with:
