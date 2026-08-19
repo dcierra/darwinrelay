@@ -2,7 +2,7 @@
 
 All notable public DarwinRelay changes will be documented here.
 
-## Unreleased
+## 0.6.1 — 2026-08-19
 
 - Hardened HTTP error boundaries so arbitrary request/bridge exception text is logged locally but never serialized to remote callers.
 - Replaced the in-memory plain SHA-256 OAuth client-secret verifier with a bounded fixed-size `timingSafeEqual` representation that does not hash the secret.

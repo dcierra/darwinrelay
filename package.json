@@ -1,6 +1,6 @@
 {
   "name": "darwinrelay",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "type": "module",
   "description": "Native macOS execution runtime for MCP agents: shell, PTY, background Chrome, and Accessibility-based desktop control.",
   "scripts": {
