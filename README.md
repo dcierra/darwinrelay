@@ -63,6 +63,12 @@ npm run check
 open /Applications/DarwinRelay.app
 ```
 
+For a compile/sign smoke test with **no installation side effect**, use:
+
+```bash
+DARWINRELAY_APP_OUTPUT=/tmp/DarwinRelay.app ./menubar/build.sh --build-only
+```
+
 The app appears in the macOS menu bar as **DR**. Grant the requested desktop permissions, then use **Start** for the HTTP/tunnel path you have configured.
 
 For source-only local MCP usage, the bridge can also be run directly. Full access must be explicitly acknowledged:

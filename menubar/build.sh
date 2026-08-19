@@ -15,6 +15,30 @@ APP="${DARWINRELAY_APP_OUTPUT:-$PACKAGE_DIR/DarwinRelay.app}"
 NAME="DarwinRelay"
 INSTALL_APP="${DARWINRELAY_INSTALL_APP:-1}"
 INSTALL_DIR_OVERRIDE="${DARWINRELAY_APP_INSTALL_DIR:-}"
+
+usage() {
+  cat <<'USAGE'
+Usage: menubar/build.sh [--build-only]
+
+  --build-only   Build and sign DarwinRelay.app but do not install it.
+  -h, --help     Show this help.
+
+Environment overrides:
+  DARWINRELAY_APP_OUTPUT       Build output path.
+  DARWINRELAY_INSTALL_APP=0    Equivalent to --build-only.
+  DARWINRELAY_APP_INSTALL_DIR  Install destination when installation is enabled.
+USAGE
+}
+
+while (( $# > 0 )); do
+  case "$1" in
+    --build-only) INSTALL_APP=0 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; usage >&2; exit 64 ;;
+  esac
+  shift
+done
+
 PACKAGE_VERSION="$(node -p 'require(process.argv[1]).version' "$PACKAGE_DIR/package.json")"
 BUNDLE_VERSION="${PACKAGE_VERSION%%-*}"
 source "$PACKAGE_DIR/scripts/codesign-runtime.sh"
