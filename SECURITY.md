@@ -1,5 +1,9 @@
 # Security model
 
+### Self-hosted GitHub Actions runner
+
+The private repository CI runs on a repo-scoped self-hosted macOS runner labelled `mdb-ci` / `mdb-native-e2e`. Treat `.github/workflows/**` as executable code with the permissions of the logged-in macOS user. The CI workflow explicitly refuses pull requests whose head repository differs from this repository, so fork-controlled code is never dispatched to the operator Mac. Do not relax that guard without moving CI back to an isolated hosted runner.
+
 ## Reporting a vulnerability
 
 Please do not open a public issue for vulnerabilities that could expose credentials, bypass authentication, weaken the explicit unlock, escape a containment claim, or broaden remote execution. Use this repository's private GitHub vulnerability-reporting channel so the issue can be investigated before disclosure.

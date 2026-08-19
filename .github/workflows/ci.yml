@@ -2,14 +2,19 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   test:
-    runs-on: macos-latest
+    # Never execute fork-controlled code on the operator's Mac. Same-repository
+    # branches and main are trusted because this is a private personal repo.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, macOS, ARM64, mdb-ci]
     timeout-minutes: 15
 
     steps:
