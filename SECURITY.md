@@ -4,6 +4,8 @@
 
 Public CI runs on isolated GitHub-hosted macOS runners. The repository does not dispatch pull-request code to a maintainer workstation. Real mutable AppKit E2E is a local maintainer check because TCC-dependent GUI input is not a trustworthy assertion on disposable hosted sessions.
 
+GitHub CodeQL runs independently for JavaScript/Node and Swift. JavaScript analysis is extraction-only; Swift analysis compiles the native helpers, menu app and desktop fixture on a hosted macOS runner before analysis. Dependabot monitors GitHub Actions and npm metadata.
+
 ## Reporting a vulnerability
 
 Please do not open a public issue for vulnerabilities that could expose credentials, bypass authentication, weaken the explicit unlock, escape a containment claim, or broaden remote execution. Use this repository's private GitHub vulnerability-reporting channel so the issue can be investigated before disclosure.
