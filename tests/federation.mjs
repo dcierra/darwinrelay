@@ -1056,6 +1056,14 @@ try {
 if [ "$1" = "-x" ] && [ "$2" = "cloudflared" ]; then exit 1; fi
 exec ${realPgrep} "$@"
 `, { mode: 0o700 });
+    const launchctlWrapper = path.join(fakeBin, "launchctl");
+    await fsp.writeFile(launchctlWrapper, `#!/bin/sh
+if [ "$1" = "print" ]; then
+  printf '%s\n' 'Could not find service' >&2
+  exit 3
+fi
+exit 0
+`, { mode: 0o700 });
 
     const result = await new Promise((resolve) => {
       const proc = spawn("bash", [disablePath], {
@@ -1074,6 +1082,7 @@ exec ${realPgrep} "$@"
           // fallback process scan can match and signal the live developer MDB.
           MAC_DEV_BRIDGE_INSTALL_DIR: disableInstallDir,
           MAC_DEV_BRIDGE_HTTP_PORT: "65534",
+          LAUNCHCTL_BIN: launchctlWrapper,
         },
         stdio: ["ignore", "pipe", "pipe"],
       });
