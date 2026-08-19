@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node bridge.mjs",
     "start:http": "node mcp-http.mjs",
-    "check": "node --check bridge.mjs && node --check mcp-http.mjs && node --check lib/chrome-extension-client.mjs && node --check lib/mac-ui-helper.mjs && node --check lib/mac-ui-cursor.mjs && node --check lib/advanced-browser.mjs && node --check scripts/chrome-native-host.mjs && node --check chrome-extension/service-worker.js && bash scripts/check-mac-ui-helper.sh && bash scripts/check-mac-ui-cursor.sh && bash -n scripts/desktop-doctor.sh && bash scripts/check-menubar.sh && bash scripts/check-desktop-fixture.sh && bash -n scripts/codeql-swift-build.sh",
+    "check": "node --check bridge.mjs && node --check mcp-http.mjs && node --check lib/chrome-extension-client.mjs && node --check lib/mac-ui-helper.mjs && node --check lib/mac-ui-cursor.mjs && node --check lib/advanced-browser.mjs && node --check scripts/chrome-native-host.mjs && node --check chrome-extension/service-worker.js && bash scripts/check-mac-ui-helper.sh && bash scripts/check-mac-ui-cursor.sh && bash -n scripts/desktop-doctor.sh && bash scripts/check-menubar.sh && bash scripts/check-desktop-fixture.sh",
     "test": "npm run test:core && npm run test:desktop && npm run test:lifecycle",
     "test:core": "node tests/smoke.mjs && node tests/integration.mjs && node tests/adversarial.mjs && node tests/http.mjs && node tests/oauth.mjs && node tests/pty.mjs && node tests/federation.mjs && node tests/chrome-background.mjs && node tests/advanced-browser.mjs",
     "test:desktop": "node tests/desktop-control.mjs && node tests/desktop-control-native.mjs",
@@ -67,7 +67,8 @@
     "CODE_OF_CONDUCT.md",
     "LICENSE",
     "docs/",
-    "SHA256SUMS"
+    "SHA256SUMS",
+    "Package.swift"
   ],
   "contributors": [
     "Alexander Rådahl Benz <3107277+alexanderradahl@users.noreply.github.com>"

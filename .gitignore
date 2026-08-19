@@ -30,3 +30,6 @@ http-token
 # Local native desktop-control build product
 /bin/MacUIHelper
 /bin/MacUICursorOverlay
+# SwiftPM build state
+.build/
+.swiftpm/
