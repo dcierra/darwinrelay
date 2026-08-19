@@ -15,7 +15,14 @@ import { callMacUiHelper, macUiHelperAvailable, resolveMacUiHelper } from "./lib
 import { MacUiCursor, macUiCursorAvailable, resolveMacUiCursor } from "./lib/mac-ui-cursor.mjs";
 import { advancedBrowserConfig, advancedBrowserRequest, advancedBrowserSocketStatus } from "./lib/advanced-browser.mjs";
 
-const BRIDGE_VERSION = "0.5.1-desktop.1";
+const BRIDGE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const BRIDGE_VERSION = (() => {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(BRIDGE_DIR, "package.json"), "utf8"));
+    if (typeof pkg?.version === "string" && pkg.version.trim()) return pkg.version.trim();
+  } catch {}
+  return "0.0.0-unknown";
+})();
 const SERVER_NAME = "mac-developer-bridge";
 const SERVER_TITLE = "Mac Developer Bridge";
 const MODERN_PROTOCOL = "2026-07-28";
@@ -37,7 +44,6 @@ const DEFAULT_SHELL = process.platform === "darwin" && fs.existsSync("/bin/zsh")
     : "/bin/sh";
 const SHELL = process.env.MAC_DEV_BRIDGE_SHELL || DEFAULT_SHELL;
 const CODEX_BIN = process.env.CODEX_BIN || "codex";
-const BRIDGE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const MAC_UI_HELPER = resolveMacUiHelper({ bridgeDir: BRIDGE_DIR });
 const MAC_UI_AVAILABLE = macUiHelperAvailable(MAC_UI_HELPER);
 const MAC_UI_CURSOR_HELPER = resolveMacUiCursor({ bridgeDir: BRIDGE_DIR });

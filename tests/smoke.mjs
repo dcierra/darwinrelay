@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const bridge = path.resolve(here, "..", "bridge.mjs");
+const packageJson = JSON.parse(await fs.readFile(path.resolve(here, "..", "package.json"), "utf8"));
 const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mac-developer-bridge-test-"));
 const dataDir = path.join(tempRoot, "data");
 const logDir = path.join(tempRoot, "logs");
@@ -124,6 +125,7 @@ try {
   assert.equal(byName.get("apply_patch").annotations.destructiveHint, true);
 
   const status = await call("status", "bridge_status");
+  assert.equal(status.bridgeVersion, packageJson.version, "bridge_status version must match package.json");
   assert.equal(status.fullAccessUnlocked, true);
   assert.equal(status.dataDir, dataDir);
   assert.equal(status.operatorSettings.strictApprovals, false, "relaxed approvals should be the default");
