@@ -184,7 +184,7 @@ The real mutable AppKit E2E needs a logged-in Mac with TCC permissions and there
 DARWINRELAY_RUN_NATIVE_DESKTOP_E2E=1 node tests/desktop-control-native.mjs
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Current development priorities are tracked in [ROADMAP.md](ROADMAP.md).
 
 ## Security
 
