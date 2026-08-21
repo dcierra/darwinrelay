@@ -295,10 +295,11 @@ const stateFile = (s) => path.join(s.dataDir, "oauth-state.json");
 const readState = (s) => JSON.parse(fs.readFileSync(stateFile(s), "utf8"));
 const writeState = (s, obj) => fs.writeFileSync(stateFile(s), JSON.stringify(obj));
 const digestOf = (token) => crypto.createHash("sha256").update(token, "latin1").digest("hex");
+const tokenRecord = (s, kind, token) => readState(s)[kind].find((record) => record.d === digestOf(token));
 
 let main;
 try {
-  main = await startServer({ dataDir: await freshDataDir("main"), label: "main" });
+  main = await startServer({ dataDir: await freshDataDir("main"), label: "main", env: { DARWINRELAY_AUDIT_MODE: "metadata" } });
   const ORIGIN = main.base; // fetch sends Host: 127.0.0.1:<port>, so this is the derived origin
   const PRM = `${ORIGIN}/.well-known/oauth-protected-resource/mcp`;
 
@@ -622,10 +623,42 @@ try {
   assert.match(grant.refresh_token, /^[A-Za-z0-9_-]{43}$/);
   assert.notEqual(grant.access_token, grant.refresh_token);
   assert.notEqual(grant.access_token, TOKEN);
+  const grantAccessRecord = tokenRecord(main, "access", grant.access_token);
+  const grantRefreshRecord = tokenRecord(main, "refresh", grant.refresh_token);
+  assert.match(grantAccessRecord?.sid || "", /^sess_[A-Za-z0-9_-]{16,}$/);
+  assert.equal(grantAccessRecord.sid, grantRefreshRecord?.sid, "one OAuth grant must share one opaque session correlation id");
+  assert.ok(!JSON.stringify(readState(main)).includes(grant.access_token), "OAuth state persisted plaintext access token while adding correlation metadata");
 
   const oauthTools = await rpc(main, { jsonrpc: "2.0", id: 3, method: "tools/list" }, grant.access_token);
   assert.ok(oauthTools.json?.result?.tools?.length > 0, `OAuth token could not list tools: ${oauthTools.text.slice(0, 300)}`);
-  ok("authorization_code + PKCE S256 ends in an authenticated tools/list");
+
+  // No Mcp-Session-Id here: the audit lineage must come from the separately
+  // generated OAuth grant sid, never from the access token itself.
+  const oauthProbeMarker = `OAUTH_CORRELATION_${crypto.randomBytes(6).toString("hex")}`;
+  const oauthProbe = await rpc(main, {
+    jsonrpc: "2.0",
+    id: 31,
+    method: "tools/call",
+    params: { name: "shell_exec", arguments: { command: `printf ${oauthProbeMarker}` } },
+  }, grant.access_token);
+  assert.equal(oauthProbe.status, 200, `OAuth correlation probe failed: ${oauthProbe.text.slice(0, 300)}`);
+  const auditPath = path.join(logDir, "audit.jsonl");
+  const oauthAuditRaw = await fsp.readFile(auditPath, "utf8");
+  const oauthAuditEntry = oauthAuditRaw
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => { try { return JSON.parse(line); } catch { return null; } })
+    .filter(Boolean)
+    .find((entry) => entry.tool === "shell_exec" && entry.argumentsPreview?.includes(oauthProbeMarker));
+  assert.ok(oauthAuditEntry, "OAuth shell_exec audit record missing");
+  assert.equal(oauthAuditEntry.authMode, "oauth");
+  assert.equal(oauthAuditEntry.sessionSource, "oauth-grant");
+  assert.equal(oauthAuditEntry.sessionCorrelationId, grantAccessRecord.sid);
+  assert.match(oauthAuditEntry.transportRequestId || "", /^http_[A-Za-z0-9_-]{16,}$/);
+  assert.match(oauthAuditEntry.correlationId || "", /^req_[A-Za-z0-9_-]{16,}$/);
+  assert.ok(!oauthAuditRaw.includes(grant.access_token), "OAuth access token leaked into audit while correlating a grant");
+  assert.ok(!oauthAuditRaw.includes(grant.refresh_token), "OAuth refresh token leaked into audit while correlating a grant");
+  ok("authorization_code + PKCE S256 ends in authenticated tools with opaque OAuth-grant audit lineage");
 
   // A refresh token must not be usable as an access token.
   assert.equal(await tokenStatus(main, grant.refresh_token), 401);
@@ -763,6 +796,12 @@ try {
   const refreshed = await refresh(main, first.refresh_token);
   assert.equal(refreshed.status, 200, `refresh failed: ${refreshed.text.slice(0, 300)}`);
   const second = refreshed.json;
+  const firstRefreshRecord = tokenRecord(main, "refresh", first.refresh_token);
+  const secondAccessRecord = tokenRecord(main, "access", second.access_token);
+  const secondRefreshRecord = tokenRecord(main, "refresh", second.refresh_token);
+  assert.match(firstRefreshRecord?.sid || "", /^sess_[A-Za-z0-9_-]{16,}$/);
+  assert.equal(secondAccessRecord?.sid, firstRefreshRecord.sid, "refresh changed OAuth session correlation lineage");
+  assert.equal(secondRefreshRecord?.sid, firstRefreshRecord.sid, "rotated refresh token lost OAuth session correlation lineage");
   assert.notEqual(second.access_token, first.access_token);
   assert.notEqual(second.refresh_token, first.refresh_token);
   assert.equal(second.token_type, "Bearer");
@@ -995,6 +1034,10 @@ try {
   await stop(p);
 
   const saved = readState(p);
+  const savedKeepAccess = saved.access.find((record) => record.d === digestOf(keep.access_token));
+  const savedKeepRefresh = saved.refresh.find((record) => record.d === digestOf(keep.refresh_token));
+  assert.match(savedKeepAccess?.sid || "", /^sess_[A-Za-z0-9_-]{16,}$/);
+  assert.equal(savedKeepRefresh?.sid, savedKeepAccess.sid, "persisted access/refresh records lost one OAuth session lineage");
   assert.equal(saved.client.id, CLIENT_ID, "the client_id must persist or the connector breaks inside ChatGPT");
   assert.equal((await fsp.stat(stateFile(p))).mode & 0o777, 0o600, "oauth-state.json must be 0600");
   assert.equal((await fsp.stat(persistDir)).mode & 0o777, 0o700, "the data dir must be 0700");
@@ -1009,8 +1052,12 @@ try {
 
   p = await startServer({ dataDir: persistDir, label: "persist-2" });
   assert.equal(await tokenStatus(p, keep.access_token), 405, "a live access token must survive a restart");
-  assert.equal((await refresh(p, keep.refresh_token)).status, 200, "a refresh token must survive a restart");
-  ok("access and refresh tokens survive a restart");
+  assert.equal(tokenRecord(p, "access", keep.access_token)?.sid, savedKeepAccess.sid, "OAuth session correlation id changed across restart");
+  const refreshedAfterRestart = await refresh(p, keep.refresh_token);
+  assert.equal(refreshedAfterRestart.status, 200, "a refresh token must survive a restart");
+  assert.equal(tokenRecord(p, "access", refreshedAfterRestart.json.access_token)?.sid, savedKeepAccess.sid, "refresh after restart forked OAuth session lineage");
+  assert.equal(tokenRecord(p, "refresh", refreshedAfterRestart.json.refresh_token)?.sid, savedKeepAccess.sid, "rotated refresh after restart forked OAuth session lineage");
+  ok("access, refresh, and opaque OAuth session lineage survive a restart");
   await stop(p);
 
   // Back-date exactly one record. The untouched one is the control proving the

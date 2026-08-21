@@ -4,6 +4,9 @@ All notable public DarwinRelay changes will be documented here.
 
 ## Unreleased
 
+- Added request/session provenance to audit records: every bridge request gets a server-generated correlation id, HTTP requests carry a separate transport id, optional MCP session headers are converted to non-reversible opaque ids, and OAuth grants keep an opaque session lineage across refresh without logging or deriving ids from tokens.
+- Background shell jobs and PTY metadata now retain the provenance of the request that created them, while `shell_exec` audit summaries record the spawned process id for process-level tracing.
+
 ## 0.6.2 — 2026-08-19
 
 - Fixed `menubar/build.sh --build-only` so it genuinely performs a no-install build; lifecycle coverage now verifies the requested app version explicitly instead of relying on a non-fatal shell comparison.

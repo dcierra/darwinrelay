@@ -43,7 +43,7 @@ Security mechanisms therefore focus on:
 - explicit full-access acknowledgement;
 - authentication for remote HTTP/OAuth transport;
 - bounded helper/process lifetime;
-- audit metadata/redaction;
+- audit metadata/redaction and request/session provenance;
 - fail-closed semantic refs and approval scopes;
 - stable code identity for TCC;
 - controlled Chrome routing;
@@ -78,8 +78,13 @@ DarwinRelay supports local stdio and an HTTP front end.
 - accepts a static bearer token for compatible clients;
 - implements OAuth 2.1 authorization-code + PKCE flows for MCP clients that use OAuth discovery;
 - persists only the state needed for OAuth continuity;
+- assigns a non-secret transport request id to each authenticated MCP request;
+- converts an optional `Mcp-Session-Id` header into a process-local HMAC correlation id instead of logging the raw header;
+- carries an opaque OAuth-grant session id across refreshes without deriving it from access/refresh token material;
 - scrubs sensitive transport credentials from child bridge environments;
 - respawns the bridge child and replays the MCP initialize handshake when needed.
+
+`bridge.mjs` independently assigns its own `correlationId` to every valid JSON-RPC request and stores request provenance in `AsyncLocalStorage`, because several requests may execute concurrently inside one bridge process. Tool audit entries therefore carry `correlationId`, `transport`, optional `transportRequestId`, optional `sessionCorrelationId`, `sessionSource`, and `authMode`. Background shell jobs and PTY reclaimer metadata preserve the creating request provenance; `shell_exec` audit summaries also record the spawned pid. These identifiers are observability metadata, not authorization or per-conversation capability leases.
 
 A reverse tunnel such as Cloudflare can publish the loopback HTTP service. The tunnel does not make the bridge safer by itself; authentication still gates desktop-user authority.
 

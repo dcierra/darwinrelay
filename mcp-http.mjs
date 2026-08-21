@@ -18,6 +18,13 @@ import readline from "node:readline";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import {
+  attachTransportCorrelation,
+  deriveSessionCorrelationId,
+  isCorrelationId,
+  newCorrelationId,
+} from "./lib/correlation.mjs";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BRIDGE = process.env.DARWINRELAY_ENTRY || path.join(HERE, "bridge.mjs");
 const HOST = "127.0.0.1"; // never bind wider; the only intended peer is cloudflared on loopback
@@ -139,6 +146,11 @@ if (!/^[\x21-\x7e]+$/.test(TOKEN)) {
 // granted, an attacker-controlled model could read it back from there. Use
 // DARWINRELAY_HTTP_TOKEN_FILE if that matters to you.
 const TOKEN_DIGEST = crypto.createHash("sha256").update(TOKEN, "latin1").digest();
+// Process-local key used only to turn an optional client-supplied MCP session
+// header into a non-reversible audit correlation id. It is never persisted or
+// sent to bridge.mjs; after a front-end restart the header receives a new opaque
+// correlation id by design. OAuth grant correlation is persisted separately.
+const MCP_SESSION_CORRELATION_KEY = crypto.randomBytes(32);
 // Read the optional OAuth client secret before the scrub below removes it. This
 // is an in-memory equality credential, not a password database: never persist a
 // password hash/verifier. Encode length + UTF-8 bytes into one fixed-size buffer
@@ -163,7 +175,7 @@ const CLIENT_SECRET_BUFFER = (() => {
   return fixed;
 })();
 const CONFIGURED_CLIENT_ID = (process.env.DARWINRELAY_OAUTH_CLIENT_ID || "").trim();
-const CHILD_ENV = { ...process.env };
+const CHILD_ENV = { ...process.env, DARWINRELAY_HTTP_CHILD: "1" };
 delete CHILD_ENV.DARWINRELAY_HTTP_TOKEN;
 delete CHILD_ENV.DARWINRELAY_HTTP_TOKEN_FILE;
 delete process.env.DARWINRELAY_HTTP_TOKEN;
@@ -350,7 +362,7 @@ function ensureChild() {
   return starting;
 }
 
-async function callBridge(message) {
+async function callBridge(message, transportCorrelation = null) {
   // Remember the one piece of handshake state a replacement child needs.
   // bridge.mjs:1114 accepts the bare `initialized` alias as well, so a client
   // using that form would otherwise never be replayed and would get -32002 on
@@ -360,9 +372,10 @@ async function callBridge(message) {
   }
 
   const proc = await ensureChild();
+  const forwarded = transportCorrelation ? attachTransportCorrelation(message, transportCorrelation) : message;
 
   if (message.id === undefined || message.id === null) {
-    writeRaw(proc, message); // notification: no reply expected
+    writeRaw(proc, forwarded); // notification: no reply expected
     return null;
   }
 
@@ -371,7 +384,7 @@ async function callBridge(message) {
     // waiter.reject, not reject: only the waiter clears the timeout timer.
     const waiter = register(serverId, message.id, resolve, reject, REQUEST_TIMEOUT_MS, "request");
     try {
-      writeRaw(proc, { ...message, id: serverId });
+      writeRaw(proc, { ...forwarded, id: serverId });
     } catch (e) {
       pending.delete(serverId);
       waiter.reject(e);
@@ -431,6 +444,10 @@ function rehydrate(list, now) {
       cid: typeof r.cid === "string" ? r.cid : "",
       aud: typeof r.aud === "string" ? r.aud : "",
       scope: OAUTH_SCOPE,
+      // Optional for backward compatibility with v1 state written before
+      // provenance logging. An old refresh token acquires a new opaque session
+      // id the first time it is rotated by the new runtime.
+      sid: isCorrelationId(r.sid, "sess") ? r.sid : null,
     });
   }
   return map;
@@ -481,7 +498,14 @@ function serialise(map) {
       map.delete(hex);
       continue;
     }
-    out.push({ d: hex, exp: rec.exp, cid: rec.cid, aud: rec.aud, scope: rec.scope });
+    out.push({
+      d: hex,
+      exp: rec.exp,
+      cid: rec.cid,
+      aud: rec.aud,
+      scope: rec.scope,
+      ...(isCorrelationId(rec.sid, "sess") ? { sid: rec.sid } : {}),
+    });
   }
   if (out.length > MAX_STORED_TOKENS) {
     out.sort((a, b) => a.exp - b.exp);
@@ -597,10 +621,17 @@ function resourceAccepted(value, origin) {
   return got === base || got === base + MCP_PATH;
 }
 
-function mintToken(map, clientId, aud, ttlMs) {
+function mintToken(map, clientId, aud, ttlMs, sessionCorrelationId = null) {
   const token = crypto.randomBytes(32).toString("base64url");
   const hex = sha(token).toString("hex");
-  map.set(hex, { digest: hex, exp: Date.now() + ttlMs, cid: clientId, aud, scope: OAUTH_SCOPE });
+  map.set(hex, {
+    digest: hex,
+    exp: Date.now() + ttlMs,
+    cid: clientId,
+    aud,
+    scope: OAUTH_SCOPE,
+    sid: isCorrelationId(sessionCorrelationId, "sess") ? sessionCorrelationId : null,
+  });
   return token;
 }
 
@@ -617,15 +648,15 @@ function digestMatches(map, hex) {
 // latin1 decode: re-hashing as utf8 here would silently fail to match any token
 // containing a non-ASCII byte. Reads memory only -- it is called from a
 // synchronous function that must never await.
-function oauthAccessValid(digestBuf) {
+function oauthAccessRecord(digestBuf) {
   const hex = digestBuf.toString("hex");
   const rec = store.access.get(hex);
-  if (!rec) return false;
+  if (!rec) return null;
   if (rec.exp <= Date.now()) {
     store.access.delete(hex);
-    return false;
+    return null;
   }
-  return crypto.timingSafeEqual(digestBuf, Buffer.from(rec.digest, "hex"));
+  return crypto.timingSafeEqual(digestBuf, Buffer.from(rec.digest, "hex")) ? rec : null;
 }
 
 // Called before every insert, so a drive-by flood of GET /authorize cannot grow
@@ -987,12 +1018,13 @@ function clientCredentials(req, params) {
   return { id, secret };
 }
 
-function issueTokens(res, clientId, aud) {
-  const access_token = mintToken(store.access, clientId, aud, ACCESS_TTL_MS);
+function issueTokens(res, clientId, aud, sessionCorrelationId) {
+  const sid = isCorrelationId(sessionCorrelationId, "sess") ? sessionCorrelationId : newCorrelationId("sess");
+  const access_token = mintToken(store.access, clientId, aud, ACCESS_TTL_MS, sid);
   // A refresh_token is returned on EVERY success, including refreshes: omitting
   // it lets the ChatGPT connect succeed and then hides every tool, before any
   // expiry. offline_access is deliberately not advertised for it.
-  const refresh_token = mintToken(store.refresh, clientId, aud, REFRESH_TTL_MS);
+  const refresh_token = mintToken(store.refresh, clientId, aud, REFRESH_TTL_MS, sid);
   saveStore();
   // The happy path was silent, so a working exchange left no evidence either.
   log(`oauth token issued to ${clientId} (aud=${aud || "none"}), expires in ${Math.floor(ACCESS_TTL_MS / 1000)}s`);
@@ -1075,7 +1107,7 @@ async function tokenPost(req, res) {
     if (!resourceAccepted(params.get("resource"), rec.iss)) {
       return oauthError(res, 400, "invalid_target", "resource does not identify this server");
     }
-    return issueTokens(res, rec.clientId, rec.iss);
+    return issueTokens(res, rec.clientId, rec.iss, newCorrelationId("sess"));
   }
 
   if (grant === "refresh_token") {
@@ -1102,7 +1134,7 @@ async function tokenPost(req, res) {
     // strictly single-use refresh token breaks after the first retry.
     const grace = Date.now() + REFRESH_GRACE_MS;
     if (rec.exp > grace) rec.exp = grace;
-    return issueTokens(res, rec.cid, rec.aud);
+    return issueTokens(res, rec.cid, rec.aud, rec.sid || newCorrelationId("sess"));
   }
 
   return oauthError(res, 400, "unsupported_grant_type", "only authorization_code and refresh_token are supported");
@@ -1132,13 +1164,14 @@ async function revokePost(req, res) {
 // ---------------------------------------------------------------------------
 // HTTP
 // ---------------------------------------------------------------------------
-// Returns "bearer" | "oauth" | false. Callers that must not accept an OAuth
-// token compare against "bearer" directly.
+// Returns a small non-secret credential descriptor or false. The OAuth token
+// itself never leaves this function; only its separately generated session
+// correlation id may be propagated into audit metadata.
 //
 // MUST stay synchronous: the call site below does not await, and an unawaited
 // Promise is always truthy, so an async version would authorize every request to
 // a server fronting unrestricted shell access. Nothing here may await, which is
-// why oauthAccessValid reads in-memory Maps and never disk.
+// why oauthAccessRecord reads in-memory Maps and never disk.
 function credential(req) {
   const header = req.headers.authorization;
   if (typeof header !== "string") return false;
@@ -1150,12 +1183,15 @@ function credential(req) {
   // mismatched lengths. Comparing raw token bytes instead would make it throw on
   // a wrong-length token, and that throw escapes to the guard at the bottom of
   // this file, which answers 500 -- the 401 would stop being a 401.
-  if (crypto.timingSafeEqual(got, TOKEN_DIGEST)) return "bearer";
-  return oauthAccessValid(got) ? "oauth" : false;
+  if (crypto.timingSafeEqual(got, TOKEN_DIGEST)) return { mode: "bearer", sessionCorrelationId: null };
+  const rec = oauthAccessRecord(got);
+  return rec ? { mode: "oauth", sessionCorrelationId: rec.sid || null } : false;
 }
 
-function authorized(req) {
-  return credential(req) !== false;
+function sessionCorrelationFromHeader(req) {
+  const raw = req.headers["mcp-session-id"];
+  if (typeof raw !== "string") return null;
+  return deriveSessionCorrelationId(MCP_SESSION_CORRELATION_KEY, raw);
 }
 
 // The static bearer has no issuer, audience or expiry, so accepting it is a
@@ -1404,7 +1440,7 @@ async function handle(req, res) {
     if (req.method !== "POST") return send(res, 405, { error: "method not allowed" });
     // Static bearer only. An OAuth token must not be able to revoke the
     // operator's other sessions, nor itself out of the audit trail.
-    if (credential(req) !== "bearer") {
+    if (credential(req)?.mode !== "bearer") {
       log(`401 on /revoke-all from ${req.socket.remoteAddress} (static bearer required)`);
       return send(res, 401, { error: "unauthorized" }, { "www-authenticate": challengeFor(req) });
     }
@@ -1427,8 +1463,10 @@ async function handle(req, res) {
     return send(res, 404, { error: "not found" });
   }
 
-  if (!authorized(req)) {
-    log(`401 from ${req.socket.remoteAddress} (bad or missing bearer token)`);
+  const transportRequestId = newCorrelationId("http");
+  const auth = credential(req);
+  if (!auth) {
+    log(`${transportRequestId} 401 from ${req.socket.remoteAddress} (bad or missing bearer token)`);
     // A bare "Bearer" told a client nothing about where to get a token, which is
     // why ChatGPT discovered no auth support at all.
     return send(res, 401, { error: "unauthorized" }, { "www-authenticate": challengeFor(req) });
@@ -1438,7 +1476,7 @@ async function handle(req, res) {
     loggedFirstRequest = true;
     // Makes an Accept / protocol-version mismatch diagnosable from the log.
     log(
-      `first authorized request: accept=${req.headers.accept || "<none>"} ` +
+      `${transportRequestId} first authorized request: accept=${req.headers.accept || "<none>"} ` +
         `mcp-protocol-version=${req.headers["mcp-protocol-version"] || "<none>"}`,
     );
   }
@@ -1484,13 +1522,22 @@ async function handle(req, res) {
   }
 
   const clientId = msg.id ?? null;
+  const headerSessionId = sessionCorrelationFromHeader(req);
+  const sessionCorrelationId = headerSessionId || auth.sessionCorrelationId || null;
+  const transportCorrelation = {
+    v: 1,
+    requestId: transportRequestId,
+    sessionId: sessionCorrelationId,
+    sessionSource: headerSessionId ? "mcp-session-header" : sessionCorrelationId ? "oauth-grant" : null,
+    authMode: auth.mode,
+  };
   try {
-    const reply = await callBridge(msg);
+    const reply = await callBridge(msg, transportCorrelation);
     if (reply === null) return sendEmpty(res, 202); // notification accepted
     return wantsEventStream(req) ? sendEventStream(res, reply) : send(res, 200, reply);
   } catch (e) {
     const internalMessage = String(e?.message || e);
-    log(`request failed: ${internalMessage}`);
+    log(`${transportRequestId} request failed: ${internalMessage}`);
     const status = e?.bridgeHttpStatus === 503 || e?.bridgeHttpStatus === 504 ? e.bridgeHttpStatus : 500;
     const publicMessage = status === 503
       ? "bridge temporarily unavailable"

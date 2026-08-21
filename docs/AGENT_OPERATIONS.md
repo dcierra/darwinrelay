@@ -30,7 +30,7 @@ Do not assume a permission because a macOS Settings toggle looks enabled. Use th
 ### Bridge, audit and filesystem
 
 - `bridge_status` — inspect version, runtime paths, permissions context, approval mode, helper/browser status and host identity.
-- `audit_tail` — read bounded DarwinRelay audit output.
+- `audit_tail` — read bounded DarwinRelay audit output. Entries from tool calls include a server-generated `correlationId`; HTTP-backed calls may also include `transportRequestId` and an opaque `sessionCorrelationId`. Use those fields to reconstruct overlapping workflows instead of relying on timestamps or JSON-RPC client ids.
 - `fs_stat` — metadata for one path.
 - `fs_list` — list directories, optionally recursively.
 - `fs_read` — bounded file reads.

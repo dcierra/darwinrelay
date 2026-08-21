@@ -1161,6 +1161,9 @@ await runCase("removing the unlock file with no further tool calls still termina
   const audit = await fsp.readFile(path.join(bridge.logDir, "audit.jsonl"), "utf8");
   const record = auditEntries(audit).find((entry) => entry.tool === "pty_unlock_recheck");
   assert.ok(record, "the idle recheck must leave its own audit record");
+  assert.equal(record.correlationId, undefined, "timer-driven reclaim must not inherit a stale user-request correlation id");
+  assert.equal(record.transportRequestId, undefined, "timer-driven reclaim must not inherit a stale HTTP request id");
+  assert.equal(record.sessionCorrelationId, undefined, "timer-driven reclaim must not impersonate an old MCP/OAuth session");
   assert.equal(record.summary.revoked, true);
   assert.deepEqual(
     record.summary.sessions.map((entry) => entry.id),
@@ -1255,6 +1258,9 @@ await runCase("a session is recorded for the reclaimer and its keystrokes are ne
   assert.equal(metadata.processGroupId, session.leaderPid, "disable.sh kills the GROUP; a leader pid recorded as something else is a missed reclaim");
   assert.equal(metadata.helperPid, session.helperPid);
   assert.equal(metadata.stdoutPath, null);
+  assert.match(session.provenance?.correlationId || "", /^req_[A-Za-z0-9_-]{16,}$/);
+  assert.deepEqual(metadata.provenance, session.provenance, "PTY reclaimer metadata must preserve the creating request provenance");
+  assert.equal(metadata.provenance.transport, "stdio");
   assert.equal(metadata.label, "audit-case", "a label becomes part of a filename, so it is sanitised");
   // disable.sh parses startedAt with this exact format and SILENTLY SKIPS an entry
   // it cannot parse, then prints "Disabled" having signalled nothing.
