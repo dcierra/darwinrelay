@@ -204,6 +204,10 @@ try {
     label: "integration",
   });
   assert.ok(Number.isInteger(job.pid));
+  assert.match(job.provenance?.correlationId || "", /^req_[A-Za-z0-9_-]{16,}$/);
+  assert.equal(job.provenance.transport, "stdio");
+  assert.equal(job.provenance.transportRequestId, null);
+  assert.equal(job.provenance.sessionCorrelationId, null);
   const running = await poll(async () => {
     const current = await modernTool(client, "shell_job_status", { job_id: job.id });
     return current.running && current.stdout.text.includes("job-started") ? current : null;
@@ -245,6 +249,16 @@ try {
   assert.ok(audit.text.includes('"tool":"shell_exec"'));
   assert.ok(audit.text.includes('"tool":"codex_thread_read"'));
   assert.ok(audit.text.includes('"tool":"codex_thread_turns_list"'));
+  const auditEntries = audit.text
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => { try { return JSON.parse(line); } catch { return null; } })
+    .filter(Boolean);
+  const shellAudit = auditEntries.find((entry) => entry.tool === "shell_exec");
+  assert.match(shellAudit?.correlationId || "", /^req_[A-Za-z0-9_-]{16,}$/);
+  assert.equal(shellAudit.transport, "stdio");
+  assert.equal(shellAudit.transportRequestId, null);
+  assert.equal(shellAudit.sessionCorrelationId, null);
 
   await client.stop();
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { execFileSync, spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -14,6 +15,7 @@ import { backgroundChromeCall, backgroundChromeStatus } from "./lib/chrome-exten
 import { callMacUiHelper, macUiHelperAvailable, resolveMacUiHelper } from "./lib/mac-ui-helper.mjs";
 import { MacUiCursor, macUiCursorAvailable, resolveMacUiCursor } from "./lib/mac-ui-cursor.mjs";
 import { advancedBrowserConfig, advancedBrowserRequest, advancedBrowserSocketStatus } from "./lib/advanced-browser.mjs";
+import { newCorrelationId, readTransportCorrelation } from "./lib/correlation.mjs";
 
 const BRIDGE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const BRIDGE_VERSION = (() => {
@@ -95,6 +97,11 @@ const PTY_SIGNALS = ["INT", "TERM", "KILL", "HUP", "QUIT", "USR1", "USR2", "WINC
 
 const TUNNEL_RUNTIME_KEY_WAS_PRESENT = Boolean(process.env.CONTROL_PLANE_API_KEY);
 delete process.env.CONTROL_PLANE_API_KEY;
+// Non-secret marker set only by mcp-http.mjs when it spawns this bridge child.
+// Remove it before any shell/job inherits process.env. The authoritative
+// correlationId is still generated here, independently of transport metadata.
+const HTTP_FRONTEND_CHILD = process.env.DARWINRELAY_HTTP_CHILD === "1";
+delete process.env.DARWINRELAY_HTTP_CHILD;
 const FULL_ACCESS_ACK = "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS";
 // Capture the environment acknowledgement, then remove it from our own environment so
 // no child can inherit it.
@@ -149,6 +156,28 @@ function clampInt(value, fallback, min, max) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+// Requests are deliberately handled concurrently. AsyncLocalStorage prevents
+// one chat/request from inheriting another request's provenance while promises,
+// child-process callbacks and federated tool calls overlap.
+const requestProvenanceStorage = new AsyncLocalStorage();
+
+function buildRequestProvenance(message) {
+  const upstream = HTTP_FRONTEND_CHILD ? readTransportCorrelation(message) : null;
+  return Object.freeze({
+    correlationId: newCorrelationId("req"),
+    transport: HTTP_FRONTEND_CHILD ? "http" : "stdio",
+    transportRequestId: upstream?.requestId || null,
+    sessionCorrelationId: upstream?.sessionId || null,
+    sessionSource: upstream?.sessionSource || null,
+    authMode: upstream?.authMode || null,
+  });
+}
+
+function currentProvenance() {
+  const value = requestProvenanceStorage.getStore();
+  return value ? { ...value } : null;
 }
 
 function safeJson(value) {
@@ -510,9 +539,11 @@ async function audit(tool, argsInput, summary = {}, error = null) {
   try {
     const args = auditSafeArguments(tool, argsInput);
     const raw = safeJson(args ?? {});
+    const provenance = currentProvenance();
     const entry = {
       timestamp: nowIso(),
       pid: process.pid,
+      ...(provenance || {}),
       tool,
       argumentsHash: crypto.createHash("sha256").update(raw).digest("hex"),
       summary,
@@ -626,6 +657,7 @@ async function runCommand({ command, cwd, env = {}, stdin = undefined, timeoutMs
         command,
         shell: SHELL,
         cwd: effectiveCwd,
+        pid: child.pid ?? null,
         exitCode: code,
         signal,
         timedOut,
@@ -2988,6 +3020,7 @@ function ptySessionSummary(session) {
     exitCode: session.exitCode,
     exitSignal: session.exitSignal,
     closeReason: session.closeReason,
+    provenance: session.provenance || null,
   };
 }
 
@@ -3190,6 +3223,7 @@ async function startPtySessionInSlot({ command, args, cwd, env, cols, rows, term
     id,
     kind: "pty",
     label,
+    provenance: currentProvenance(),
     command: resolved,
     args,
     cwd,
@@ -3379,6 +3413,7 @@ async function startPtySessionInSlot({ command, args, cwd, env, cols, rows, term
       id,
       kind: "pty",
       label,
+      provenance: session.provenance,
       pid: session.leaderPid,
       processGroupId: session.leaderPid,
       command: `${resolved} ${args.join(" ")}`.trim(),
@@ -4352,8 +4387,9 @@ async function dispatchTool(name, args) {
       const maxOutputBytes = optionalInteger(args, "max_output_bytes", DEFAULT_OUTPUT_BYTES, 1_024, MAX_OUTPUT_BYTES);
       try {
         const result = await runCommand({ command, cwd, env, stdin, timeoutMs, maxOutputBytes });
-        await audit(name, args, { exitCode: result.exitCode, signal: result.signal, timedOut: result.timedOut, durationMs: result.durationMs });
-        return result;
+        const { pid, ...publicResult } = result;
+        await audit(name, args, { pid, exitCode: result.exitCode, signal: result.signal, timedOut: result.timedOut, durationMs: result.durationMs });
+        return publicResult;
       } catch (error) {
         await audit(name, args, {}, error);
         throw error;
@@ -4408,6 +4444,7 @@ async function dispatchTool(name, args) {
       const metadata = {
         id,
         label,
+        provenance: currentProvenance(),
         pid: child.pid,
         processGroupId: child.pid,
         command,
@@ -4685,8 +4722,9 @@ async function dispatchTool(name, args) {
         timeoutMs: 120_000,
         maxOutputBytes: DEFAULT_OUTPUT_BYTES,
       });
-      await audit(name, args, { exitCode: result.exitCode, checkOnly, reverse, threeWay, durationMs: result.durationMs });
-      return result;
+      const { pid, ...publicResult } = result;
+      await audit(name, args, { pid, exitCode: result.exitCode, checkOnly, reverse, threeWay, durationMs: result.durationMs });
+      return publicResult;
     }
 
     case "codex_thread_read": {
@@ -4779,6 +4817,7 @@ async function dispatchTool(name, args) {
           idleTimeoutMs,
           startedAt: new Date(session.createdAt).toISOString(),
           cursor: 0,
+          provenance: session.provenance,
         };
         await audit(name, args, { sessionId: session.id, leaderPid: session.leaderPid, pts: session.pts, command: session.command });
         return result;
@@ -5062,7 +5101,7 @@ async function dispatchTool(name, args) {
   }
 }
 
-async function handleMessage(message) {
+async function handleMessageInner(message) {
   if (!message || typeof message !== "object") return;
   const id = message.id;
   const method = message.method;
@@ -5198,6 +5237,12 @@ async function handleMessage(message) {
   }
 
   sendError(id, -32601, `Method not found: ${method}`);
+}
+
+async function handleMessage(message) {
+  if (!message || typeof message !== "object" || Array.isArray(message)) return;
+  const provenance = buildRequestProvenance(message);
+  return await requestProvenanceStorage.run(provenance, () => handleMessageInner(message));
 }
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });

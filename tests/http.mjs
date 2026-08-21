@@ -56,6 +56,8 @@ await fsp.rm(tokenDir, { recursive: true, force: true });
 console.log("  PASS  token file failures exit 78 with a message naming the file");
 
 const dataDir = await fsp.realpath(await fsp.mkdtemp(path.join(os.tmpdir(), "darwinrelay-http-")));
+const logDir = path.join(dataDir, "logs");
+const auditFile = path.join(logDir, "audit.jsonl");
 await fsp.writeFile(path.join(dataDir, "FULL_ACCESS_ENABLED"), "I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS\n");
 
 const server = spawn(process.execPath, [TARGET], {
@@ -66,8 +68,9 @@ const server = spawn(process.execPath, [TARGET], {
     DARWINRELAY_HTTP_PORT: String(PORT),
     DARWINRELAY_ENTRY: BRIDGE,
     DARWINRELAY_DATA_DIR: dataDir,
+    DARWINRELAY_LOG_DIR: logDir,
     DARWINRELAY_UNLOCK_FILE: path.join(dataDir, "FULL_ACCESS_ENABLED"),
-    DARWINRELAY_AUDIT_MODE: "off",
+    DARWINRELAY_AUDIT_MODE: "metadata",
   },
 });
 let stderr = "";
@@ -94,13 +97,14 @@ async function waitForListen() {
   throw new Error(`server never listened. stderr:\n${stderr}`);
 }
 
-function rpc(body, token = TOKEN) {
+function rpc(body, token = TOKEN, extraHeaders = {}) {
   return fetch(`${BASE}/mcp`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
       ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...extraHeaders,
     },
     body: typeof body === "string" ? body : JSON.stringify(body),
     // Without this, an id-collision regression manifests as a 600-second hang
@@ -138,19 +142,21 @@ try {
 
   // --- DEFECT 1: concurrent identical client ids must not cross ------------
   // Two callers both use id:1. Each must get its own result back, with id:1.
+  const rawSessionA = "chat-session-a-low-entropy";
+  const rawSessionB = "chat-session-b-low-entropy";
   const [a, b] = await Promise.all([
     rpc({
       jsonrpc: "2.0",
       id: 1,
       method: "tools/call",
       params: { name: "shell_exec", arguments: { command: "sleep 0.4; printf CALLER_A_SECRET" } },
-    }).then((r) => r.json()),
+    }, TOKEN, { "mcp-session-id": rawSessionA }).then((r) => r.json()),
     rpc({
       jsonrpc: "2.0",
       id: 1,
       method: "tools/call",
       params: { name: "shell_exec", arguments: { command: "printf CALLER_B_ONLY" } },
-    }).then((r) => r.json()),
+    }, TOKEN, { "mcp-session-id": rawSessionB }).then((r) => r.json()),
   ]);
   const aText = JSON.stringify(a);
   const bText = JSON.stringify(b);
@@ -161,6 +167,84 @@ try {
   assert.ok(!aText.includes("CALLER_B_ONLY"), "A leaked B's result");
   assert.ok(!bText.includes("CALLER_A_SECRET"), "B leaked A's result");
   ok("concurrent duplicate ids do not cross responses");
+
+  // Correlation ids must remain correct under the exact same concurrency that
+  // used to cross-wire duplicate client request ids. Raw MCP session ids and the
+  // bearer credential must never be copied into audit.jsonl.
+  const repeatA = await (
+    await rpc({
+      jsonrpc: "2.0",
+      id: 7,
+      method: "tools/call",
+      params: { name: "shell_exec", arguments: { command: "printf CALLER_A_REPEAT" } },
+    }, TOKEN, { "mcp-session-id": rawSessionA })
+  ).json();
+  assert.ok(JSON.stringify(repeatA).includes("CALLER_A_REPEAT"));
+
+  const auditRaw = await fsp.readFile(auditFile, "utf8");
+  const auditEntries = auditRaw
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  const entryFor = (marker) => auditEntries.find((entry) => entry.tool === "shell_exec" && entry.argumentsPreview?.includes(marker));
+  const auditA = entryFor("CALLER_A_SECRET");
+  const auditB = entryFor("CALLER_B_ONLY");
+  const auditARepeat = entryFor("CALLER_A_REPEAT");
+  for (const entry of [auditA, auditB, auditARepeat]) {
+    assert.ok(entry, "missing correlated shell_exec audit entry");
+    assert.match(entry.correlationId, /^req_[A-Za-z0-9_-]{16,}$/);
+    assert.match(entry.transportRequestId, /^http_[A-Za-z0-9_-]{16,}$/);
+    assert.match(entry.sessionCorrelationId, /^sess_[A-Za-z0-9_-]{16,}$/);
+    assert.equal(entry.transport, "http");
+    assert.equal(entry.authMode, "bearer");
+    assert.equal(entry.sessionSource, "mcp-session-header");
+    assert.ok(Number.isInteger(entry.summary.pid) && entry.summary.pid > 1, "shell_exec audit must name the spawned pid");
+  }
+  assert.notEqual(auditA.correlationId, auditB.correlationId, "concurrent calls shared a bridge correlation id");
+  assert.notEqual(auditA.transportRequestId, auditB.transportRequestId, "concurrent calls shared an HTTP request id");
+  assert.notEqual(auditA.sessionCorrelationId, auditB.sessionCorrelationId, "different MCP sessions collapsed to one audit session");
+  assert.equal(auditA.sessionCorrelationId, auditARepeat.sessionCorrelationId, "one MCP session did not keep a stable correlation id");
+  assert.notEqual(auditA.correlationId, auditARepeat.correlationId, "separate requests in one session must still have separate correlation ids");
+  assert.ok(!auditRaw.includes(rawSessionA) && !auditRaw.includes(rawSessionB), "raw MCP session id leaked into audit");
+  assert.ok(!auditRaw.includes(TOKEN), "bearer token leaked into audit");
+  ok("audit correlation separates requests, preserves session lineage, and logs no raw session/token material");
+
+  // The transport envelope is an implementation detail, not client authority.
+  // A caller that guesses its field name must not be able to forge provenance.
+  const spoofedTransportId = "http_AAAAAAAAAAAAAAAAAAAAAAAA";
+  const spoofedSessionId = "sess_BBBBBBBBBBBBBBBBBBBBBBBB";
+  const spoofMarker = "CORRELATION_SPOOF_REJECTED";
+  const spoofReply = await (
+    await rpc({
+      jsonrpc: "2.0",
+      id: 8,
+      method: "tools/call",
+      _darwinrelayTransportCorrelation: {
+        v: 1,
+        requestId: spoofedTransportId,
+        sessionId: spoofedSessionId,
+        sessionSource: "oauth-grant",
+        authMode: "oauth",
+      },
+      params: { name: "shell_exec", arguments: { command: `printf ${spoofMarker}` } },
+    }, TOKEN, { "mcp-session-id": rawSessionA })
+  ).json();
+  assert.ok(JSON.stringify(spoofReply).includes(spoofMarker));
+  const spoofAuditRaw = await fsp.readFile(auditFile, "utf8");
+  const spoofAudit = spoofAuditRaw
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => { try { return JSON.parse(line); } catch { return null; } })
+    .filter(Boolean)
+    .find((entry) => entry.tool === "shell_exec" && entry.argumentsPreview?.includes(spoofMarker));
+  assert.ok(spoofAudit, "spoofing probe audit record missing");
+  assert.notEqual(spoofAudit.transportRequestId, spoofedTransportId, "client forged the HTTP request correlation id");
+  assert.notEqual(spoofAudit.sessionCorrelationId, spoofedSessionId, "client forged the session correlation id");
+  assert.equal(spoofAudit.sessionCorrelationId, auditA.sessionCorrelationId, "trusted header-derived session lineage was not preserved");
+  assert.equal(spoofAudit.authMode, "bearer", "client forged the authenticated transport mode");
+  assert.equal(spoofAudit.sessionSource, "mcp-session-header", "client forged the session source");
+  ok("client-supplied transport correlation metadata cannot forge audit provenance");
 
   // --- DEFECT 2: bearer token must not be visible to shell commands -------
   const envProbe = await (
