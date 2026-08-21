@@ -12,9 +12,12 @@ For implementation details, start with [AGENTS.md](AGENTS.md) and [docs/ARCHITEC
 
 DarwinRelay can expose broad local authority, so concurrent clients and long-running agent turns need explicit ownership and traceability.
 
+Completed foundation:
+
+- request/session correlation and provenance in audit metadata without logging credentials or raw MCP session identifiers.
+
 Current priorities:
 
-- safer request/session correlation in audit metadata without logging credentials or sensitive browser/session data;
 - cancellation propagation through the transport and tool-execution layers;
 - stale-execution containment so superseded work cannot keep mutating resources indefinitely;
 - resource-scoped writer ownership for mutation-heavy workflows such as Git repositories;
