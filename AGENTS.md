@@ -186,6 +186,7 @@ After PR merge, compare the tested candidate tree with the exact merge commit. I
 ### Installed-runtime updates
 
 - Use `./scripts/update.sh` for a release-to-release update; do not hand-roll `git pull` + app replacement.
+- The menu-bar **Update DarwinRelay…** action must remain only a confirmed launcher for that canonical updater in an independent Terminal process. Do not duplicate release resolution, checkout mutation, app installation, rollback, or validation logic in Swift.
 - The updater is intentionally manual because restarting DarwinRelay revokes in-flight execution authority. Obtain explicit operator approval before passing `--yes` or otherwise triggering the restart.
 - Prefer a normal local Terminal/iTerm or another independent local shell for a DarwinRelay self-update. The current MCP transport is expected to disappear while it restarts, so a tool call running *through* that transport is not a reliable owner for the whole transaction.
 - The updater must keep refusing dirty/development checkouts, non-canonical origins, moved release tags, signing-identity changes, and destructive Git cleanup. Never weaken those checks for convenience.

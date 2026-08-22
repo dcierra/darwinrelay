@@ -149,6 +149,20 @@ wait_runtime_ui_status_ready() { # probe-script, token-file, port, attempts, int
   return 1
 }
 
+acquire_update_lock() {
+  local data_dir lock_file
+  data_dir="${DARWINRELAY_DATA_DIR:-$HOME/Library/Application Support/DarwinRelay}"
+  lock_file="$data_dir/update.lock"
+  mkdir -p "$data_dir" || return 73
+  chmod 700 "$data_dir" 2>/dev/null || true
+  exec 9>"$lock_file" || return 73
+  chmod 600 "$lock_file" 2>/dev/null || true
+  if ! /usr/bin/lockf -s -t 0 9; then
+    echo "Another DarwinRelay update transaction is already running." >&2
+    return 75
+  fi
+}
+
 if [[ "${DARWINRELAY_UPDATE_LIBRARY_ONLY:-0}" == "1" ]]; then
   if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
     return 0
@@ -227,7 +241,9 @@ for tool in git node npm codesign launchctl curl plutil ps awk sed grep shasum; 
   command -v "$tool" >/dev/null 2>&1 || { echo "Required tool not found: $tool" >&2; exit 69; }
 done
 [[ "$(uname -s)" == "Darwin" ]] || { echo "DarwinRelay's installed-app updater is macOS-only." >&2; exit 69; }
+[[ -x /usr/bin/lockf ]] || { echo "Required macOS lock primitive not found: /usr/bin/lockf" >&2; exit 69; }
 [[ -d "$ROOT/.git" || -f "$ROOT/.git" ]] || { echo "Not a Git checkout: $ROOT" >&2; exit 69; }
+acquire_update_lock || exit $?
 
 cd "$ROOT"
 ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
@@ -426,7 +442,7 @@ rollback_update() {
   local original_rc="${1:-1}"
   (( ROLLING_BACK == 0 )) || exit "$original_rc"
   ROLLING_BACK=1
-  trap - ERR INT TERM
+  trap - ERR INT TERM HUP
   set +e
   echo
   echo "Update failed; rolling back to $OLD_TAG..." >&2
@@ -454,6 +470,7 @@ rollback_update() {
 }
 trap 'rollback_update $?' ERR
 trap 'rollback_update 130' INT TERM
+trap 'rollback_update 129' HUP
 
 # Stop before replacing source files. This is deliberately fail-closed: no MCP
 # mutation authority remains live while the checkout is between release states.
@@ -519,7 +536,7 @@ if (( CANDIDATE_MODE == 1 )) && [[ "$CANDIDATE_FAILPOINT" == "after_validation" 
   false
 fi
 
-trap - ERR INT TERM
+trap - ERR INT TERM HUP
 printf '\nDarwinRelay update complete: %s -> %s\n' "$OLD_TAG" "$TARGET_TAG"
 printf 'Checkout and app are aligned at %s; rollback app retained at %s/.DarwinRelay.app.rollback\n' "$TARGET_VERSION" "$APP_DIR"
 printf 'HTTP LaunchAgent owns the live menu runtime (pid %s).\n' "$LAUNCHAGENT_PID"

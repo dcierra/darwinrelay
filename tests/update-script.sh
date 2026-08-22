@@ -19,6 +19,37 @@ if is_canonical_origin /tmp/darwinrelay; then exit 1; fi
 if is_release_tag v0.6.4-beta.1; then exit 1; fi
 if is_release_tag latest; then exit 1; fi
 
+# The transaction lock is a real advisory lock held on fd 9, so simultaneous
+# menu/Terminal launches fail immediately without stale-lock cleanup races.
+cat > "$TMP/lock-holder.sh" <<EOF_LOCK
+#!/bin/bash
+set -euo pipefail
+DARWINRELAY_UPDATE_LIBRARY_ONLY=1 source "$ROOT/scripts/update.sh"
+export DARWINRELAY_DATA_DIR="$TMP/lock-data"
+acquire_update_lock
+printf acquired > "$TMP/lock-acquired"
+sleep 2
+EOF_LOCK
+cat > "$TMP/lock-contender.sh" <<EOF_LOCK
+#!/bin/bash
+set -euo pipefail
+DARWINRELAY_UPDATE_LIBRARY_ONLY=1 source "$ROOT/scripts/update.sh"
+export DARWINRELAY_DATA_DIR="$TMP/lock-data"
+acquire_update_lock
+EOF_LOCK
+chmod +x "$TMP/lock-holder.sh" "$TMP/lock-contender.sh"
+"$TMP/lock-holder.sh" &
+LOCK_HOLDER=$!
+for _ in {1..50}; do [[ -f "$TMP/lock-acquired" ]] && break; sleep 0.02; done
+[[ -f "$TMP/lock-acquired" ]]
+set +e
+"$TMP/lock-contender.sh"
+LOCK_RC=$?
+set -e
+[[ "$LOCK_RC" == 75 ]]
+wait "$LOCK_HOLDER"
+"$TMP/lock-contender.sh"
+
 mkdir -p "$TMP/work"
 git -C "$TMP/work" init -q
 git -C "$TMP/work" config user.email test@example.invalid
@@ -109,6 +140,9 @@ grep -Fq 'Native desktop baseline: READY via live MCP runtime.' "$ROOT/scripts/u
 grep -Fq 'Native desktop permissions preserved after update via live MCP runtime.' "$ROOT/scripts/update.sh"
 grep -Fq -- '--tool ui_status' "$ROOT/scripts/update.sh"
 grep -Fq 'record_candidate_failpoint after_validation' "$ROOT/scripts/update.sh"
+grep -Fq "trap 'rollback_update 129' HUP" "$ROOT/scripts/update.sh"
+grep -Fq 'Another DarwinRelay update transaction is already running.' "$ROOT/scripts/update.sh"
+grep -Fq '/usr/bin/lockf -s -t 0 9' "$ROOT/scripts/update.sh"
 grep -Fq 'DARWINRELAY_UPDATE_CANDIDATE_MARKER_FILE' "$ROOT/scripts/update.sh"
 grep -Fq 'TARGET_PROBE_SCRIPT="$TARGET_PROBE_DIR/probe-bridge-status.mjs"' "$ROOT/scripts/update.sh"
 grep -Fq 'Candidate updater failed before the expected' "$ROOT/scripts/test-update-candidate.sh"

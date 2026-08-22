@@ -188,7 +188,7 @@ Do not attempt to bypass Strict mode through shell, environment tricks, another 
 
 The canonical updater exists from v0.6.5 onward. An installation pinned to v0.6.4 or older needs one final manual source-first upgrade/reinstall to v0.6.5 before this workflow is available.
 
-For a source-first installation on v0.6.5 or newer, use the repository's manual updater from an independent local shell:
+For a source-first installation on v0.6.5 or newer, use the repository's manual updater from an independent local shell. From v0.6.9 onward, the menu-bar **Update DarwinRelay…** action is a user-facing launcher for this exact transaction; it opens an independent Terminal `.command` after explicit confirmation rather than reimplementing update logic inside the app:
 
 ```bash
 cd /path/to/darwinrelay

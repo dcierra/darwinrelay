@@ -176,7 +176,9 @@ DARWINRELAY_APP_OUTPUT=/tmp/DarwinRelay.app ./menubar/build.sh --build-only
 
 `./scripts/update.sh` is included starting with DarwinRelay **v0.6.5**. If an existing installation is on v0.6.4 or older, perform one final source-first manual upgrade/reinstall to v0.6.5 using the installation steps above; from v0.6.5 onward, use the updater for release-to-release changes.
 
-Run updates from a normal local Terminal/iTerm session (or another independent local shell), not through the DarwinRelay MCP connection that is about to restart:
+From DarwinRelay v0.6.9 onward, the menu bar also exposes **Update DarwinRelay…**. It asks for explicit confirmation, opens the same canonical updater in an independent Terminal window, and shows progress while the app restarts. There is no silent or automatic update path.
+
+You can run the same updater directly from a normal local Terminal/iTerm session (or another independent local shell), not through the DarwinRelay MCP connection that is about to restart:
 
 ```bash
 cd /path/to/darwinrelay
