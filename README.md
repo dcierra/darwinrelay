@@ -25,7 +25,7 @@ Find why authentication is failing. Reproduce the problem, fix the underlying
 cause, run the relevant tests, and verify the result locally.
 ```
 
-With a ChatGPT plan/workspace that supports full MCP write/modify actions, DarwinRelay lets the same conversation carry the task through the whole local loop:
+When ChatGPT exposes DarwinRelay's full tool surface, the same conversation can carry the task through the whole local loop:
 
 ```text
 understand → inspect → reproduce → modify → execute → verify → iterate
@@ -35,11 +35,11 @@ DarwinRelay does not require Codex for that workflow. ChatGPT is the reasoning c
 
 ### ChatGPT availability
 
-ChatGPT's MCP availability is controlled by OpenAI and can change independently of DarwinRelay. OpenAI currently documents full MCP write/modify actions for ChatGPT Business and Enterprise/Edu, while Pro custom MCP apps are limited to read/fetch actions; custom MCP apps are currently used on ChatGPT web. Check the current [OpenAI developer-mode and MCP app documentation](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt-beta) before setup.
+ChatGPT's custom-MCP availability is controlled by OpenAI and can change independently of DarwinRelay. Plan, workspace, rollout, and UI behavior may differ from the current documentation, so treat the tool surface shown in your account as authoritative for what that ChatGPT session can use. See the current [OpenAI developer-mode and MCP app documentation](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt-beta) when setting up the connection.
 
 DarwinRelay itself remains MCP-client-neutral and can also be used by other clients that support the required MCP tool surface.
 
-Here, “local agent” describes the workflow, not ChatGPT's separate **Agent mode** product feature. OpenAI currently says Agent mode does not use custom MCP apps; use DarwinRelay from a normal ChatGPT conversation with the custom app selected.
+Here, “local agent” describes the workflow, not ChatGPT's separate **Agent mode** product feature. OpenAI currently says Agent mode does not use custom apps; use DarwinRelay from a normal ChatGPT conversation with the custom app selected.
 
 ## What can it do?
 
@@ -126,6 +126,21 @@ Optional capabilities:
 
 ### 2. Build from source
 
+If you already use a local coding agent such as Codex, Claude Code, or another tool with shell/filesystem access, the easiest path is to give it this repository and ask it to perform the source install for you:
+
+```text
+Install DarwinRelay on this Mac from the canonical repository:
+https://github.com/dcierra/darwinrelay
+
+Read AGENTS.md first. Use the documented source-first/self-build path, do not
+weaken any security controls, do not use my personal Chrome profile, and stop
+for any macOS permission or consent step that requires me to approve it.
+When installation is complete, verify the local runtime and tell me exactly
+what remains for connecting ChatGPT.
+```
+
+Or run the same steps yourself:
+
 ```bash
 git clone https://github.com/dcierra/darwinrelay.git
 cd darwinrelay
@@ -160,7 +175,7 @@ Then list ~/Projects/myapp and read its top-level README/package metadata.
 Do not modify files or run shell commands yet.
 ```
 
-Then, on a ChatGPT plan/workspace with full MCP write/modify support, try the real workflow:
+Then, if ChatGPT exposes DarwinRelay's write/execute tools in your account, try the real workflow:
 
 ```text
 Use DarwinRelay and work on ~/Projects/myapp.

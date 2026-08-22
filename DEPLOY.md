@@ -7,7 +7,7 @@ This document is the advanced transport reference. It deliberately separates **i
 - **Option B — HTTPS Server URL through Cloudflare Tunnel**: publishes the loopback HTTP/OAuth front end at a public HTTPS origin.
 - **Option A — OpenAI Secure MCP Tunnel**: uses the OpenAI tunnel client for supported workspaces without publishing an inbound public endpoint.
 
-ChatGPT plan/workspace availability is controlled by OpenAI and can change. Check the current OpenAI MCP/developer-mode documentation before choosing a path. `install.sh` is **Option A-specific**; it is not DarwinRelay's universal installer.
+ChatGPT account/workspace availability and rollout behavior are controlled by OpenAI and can change. Check the actual tool/connection surface in your account plus the current OpenAI MCP/developer-mode documentation before choosing a path. `install.sh` is **Option A-specific**; it is not DarwinRelay's universal installer.
 
 Read [SECURITY.md](SECURITY.md) before exposing either transport. A credential accepted by the transport ultimately gates local execution with the authority of the macOS user running DarwinRelay.
 

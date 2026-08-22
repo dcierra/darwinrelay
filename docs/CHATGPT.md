@@ -10,18 +10,11 @@ clone → self-build → start DarwinRelay → connect ChatGPT → verify → fi
 
 Chrome automation, Codex history, and native macOS UI permissions are optional follow-up capabilities. They are not required for the first shell/filesystem coding workflow.
 
-## Before you start: ChatGPT plan availability
+## Before you start: ChatGPT availability
 
-ChatGPT controls which MCP capabilities are available in each plan/workspace. OpenAI currently documents:
+ChatGPT controls which MCP capabilities are exposed to each account/workspace, and rollout behavior can change independently of DarwinRelay. OpenAI's published plan matrix may not perfectly match every account during rollout, so verify the actual DarwinRelay tool surface shown in your ChatGPT account and check the current [OpenAI developer-mode and MCP app documentation](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt-beta) when setting up the connection.
 
-- full MCP support including write/modify actions for ChatGPT Business and Enterprise/Edu;
-- Pro custom MCP apps with read/fetch actions only;
-- developer-mode/App UI and permissions as beta functionality that can change;
-- custom MCP apps on ChatGPT web rather than mobile.
-
-Check the current [OpenAI developer-mode and MCP app documentation](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt-beta) before setup.
-
-DarwinRelay can expose local write/execute tools, but ChatGPT may decline to surface or invoke them if the account/workspace does not support full MCP actions.
+DarwinRelay can expose read, write, and execute tools; ChatGPT decides which of those it will surface and invoke in the current account/session.
 
 This guide uses a normal ChatGPT conversation with a custom app. OpenAI currently documents that the separate **Agent mode** feature does not use custom apps.
 
@@ -34,7 +27,17 @@ Requirements:
 - Xcode Command Line Tools / `swiftc`;
 - `cloudflared` on the login-shell `PATH` for the normal Server URL path described below.
 
-Build and install the local menu app:
+If you already have a local coding agent with shell/filesystem access, you can hand it the installation instead of typing the build steps yourself:
+
+```text
+Install DarwinRelay on this Mac from https://github.com/dcierra/darwinrelay.
+Read AGENTS.md first. Follow the documented source-first/self-build path.
+Do not weaken security controls or use a personal Chrome profile. Stop and ask
+me whenever macOS requires a permission or consent action from the user. Verify
+the runtime when finished and tell me what remains for the ChatGPT connection.
+```
+
+Or build and install the local menu app manually:
 
 ```bash
 git clone https://github.com/dcierra/darwinrelay.git
@@ -123,7 +126,7 @@ Full Disk Access is only needed when the task must read macOS-protected location
 
 ## 5. Run the first real local task
 
-On a ChatGPT plan/workspace with full MCP write/modify actions, use a bounded developer task:
+If the DarwinRelay app exposes write/execute tools in your ChatGPT session, use a bounded developer task:
 
 ```text
 Use DarwinRelay and work on ~/Projects/myapp.
