@@ -9,8 +9,6 @@
     <string>__APP_EXECUTABLE__</string>
     <string>--start</string>
   </array>
-  <key>WorkingDirectory</key>
-  <string>__PACKAGE_DIR__</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key><string>__HOME__</string>

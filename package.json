@@ -10,7 +10,7 @@
     "test": "npm run test:core && npm run test:desktop && npm run test:lifecycle",
     "test:core": "node tests/smoke.mjs && node tests/bridge-status-probe.mjs && node tests/integration.mjs && node tests/adversarial.mjs && node tests/http.mjs && node tests/oauth.mjs && node tests/pty.mjs && node tests/federation.mjs && node tests/chrome-background.mjs && node tests/advanced-browser.mjs",
     "test:desktop": "node tests/desktop-control.mjs && bash tests/tunnel-url.sh && bash tests/desktop-doctor-routing.sh && node tests/desktop-control-native.mjs",
-    "test:lifecycle": "bash tests/background-chrome-installer.sh && bash tests/http-autostart.sh && bash tests/menubar-atomic-install.sh && bash tests/menubar-single-instance.sh && bash tests/installer-mock.sh && bash tests/doctor-readiness.sh",
+    "test:lifecycle": "bash tests/background-chrome-installer.sh && bash tests/http-autostart.sh && bash tests/deploy-menubar-pid-discovery.sh && bash tests/menubar-atomic-install.sh && bash tests/menubar-single-instance.sh && bash tests/installer-mock.sh && bash tests/doctor-readiness.sh",
     "check:integrity": "bash scripts/check-checksums.sh",
     "update:integrity": "bash scripts/update-checksums.sh"
   },

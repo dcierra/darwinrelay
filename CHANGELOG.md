@@ -4,6 +4,8 @@ All notable public DarwinRelay changes will be documented here.
 
 ## Unreleased
 
+- Fixed HTTP autostart from source checkouts under protected locations such as `~/Documents`: the LaunchAgent no longer asks launchd itself to `chdir` into the source tree before the signed DarwinRelay app starts; `DARWINRELAY_HOME` remains the explicit package locator used by the app.
+- Fixed `scripts/deploy-menubar-update.sh` process discovery so busy process tables cannot turn a successful PID lookup into SIGPIPE/exit 141 under `pipefail`; lifecycle coverage now exercises that failure mode deterministically.
 ## 0.6.3 — 2026-08-22
 
 - Made normal virtual AI cursor moves transient: `ui_cursor action=move` now auto-hides after 2.5 seconds by default (configurable per call, with `0` as an explicit persistent override), while `show` remains the deliberate persistent mode. This prevents the click-through DarwinRelay cursor from lingering on the operator desktop after an agent stops using it.
