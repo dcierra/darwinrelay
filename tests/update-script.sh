@@ -132,5 +132,8 @@ grep -Fq 'Candidate worktree must be clean and committed.' "$ROOT/scripts/test-u
 grep -Fq 'Candidate and installed checkout must share the same canonical Git object store.' "$ROOT/scripts/test-update-candidate.sh"
 grep -Fq 'Candidate full round-trip passed' "$ROOT/scripts/test-update-candidate.sh"
 grep -Fq 'Candidate rollback check passed' "$ROOT/scripts/test-update-candidate.sh"
+grep -Fq 'competing DarwinRelay launchd labels exist' "$ROOT/scripts/test-update-candidate.sh"
+grep -Fq 'menu ownership does not match the canonical LaunchAgent' "$ROOT/scripts/test-update-candidate.sh"
+grep -Fq 'Candidate environment preflight passed' "$ROOT/scripts/test-update-candidate.sh"
 
 echo "manual updater test passed"

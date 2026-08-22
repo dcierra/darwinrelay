@@ -179,6 +179,7 @@ For any change that can affect installation, lifecycle, launchd ownership, rollb
 ```
 
 The first injects a failure immediately after the app swap and must restore the prior release. The second lets the candidate reach full LaunchAgent ownership + authenticated doctor validation and then deliberately rolls back, proving a full round-trip without leaving production on an unpublished commit. `scripts/test-update-candidate.sh` is maintainer-only; the public `scripts/update.sh` remains release-tag-only. **Do not create a public tag merely to obtain a realistic updater target.**
+The candidate harness also refuses to start if any competing DarwinRelay launchd label exists or if the live menu PID is not owned by the canonical HTTP LaunchAgent. Treat that preflight as a hard release-engineering invariant; stale `launchctl submit` jobs can otherwise invalidate every lifecycle result by silently respawning the app.
 
 After PR merge, compare the tested candidate tree with the exact merge commit. If squash changed the commit SHA, the tree may still be equivalent; tag only after the merge tree is proven identical to the locally tested candidate tree and required post-merge CI/CodeQL is green. If the tree differs, rerun the real-Mac candidate transaction on the exact new tree before tagging.
 

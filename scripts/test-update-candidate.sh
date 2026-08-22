@@ -13,23 +13,27 @@ for arg in "$@"; do
   case "$arg" in
     --rollback-check) MODE="rollback" ;;
     --keep-installed) MODE="apply" ;;
+    --preflight-only) MODE="preflight" ;;
     --yes) ARGS+=("--yes") ;;
     -h|--help)
       cat <<'USAGE'
-Usage: ./scripts/test-update-candidate.sh [--rollback-check|--keep-installed] --yes
+Usage: ./scripts/test-update-candidate.sh [--preflight-only|--rollback-check|--keep-installed] [--yes]
 
 Maintainer-only: validate this clean worktree's exact commit against the installed
 DarwinRelay release checkout before publishing a tag. By default the candidate
 reaches full LaunchAgent/doctor validation and is then deliberately rolled back
-to the original release. --rollback-check injects an earlier failure immediately
-after the app swap. --keep-installed leaves a fully validated candidate installed.
+to the original release. --preflight-only performs only non-mutating environment
+checks. --rollback-check injects an earlier failure immediately after the app swap.
+--keep-installed leaves a fully validated candidate installed.
 USAGE
       exit 0
       ;;
     *) echo "Unknown argument: $arg" >&2; exit 64 ;;
   esac
 done
-[[ " ${ARGS[*]} " == *" --yes "* ]] || { echo "Candidate testing requires --yes after explicit operator approval." >&2; exit 64; }
+if [[ "$MODE" != "preflight" ]]; then
+  [[ " ${ARGS[*]} " == *" --yes "* ]] || { echo "Candidate testing requires --yes after explicit operator approval." >&2; exit 64; }
+fi
 
 [[ -x "$APP/Contents/MacOS/DarwinRelay" ]] || { echo "Installed DarwinRelay.app not found: $APP" >&2; exit 69; }
 PROD_ROOT="$(/usr/libexec/PlistBuddy -c 'Print :DarwinRelayPackageDirectory' "$APP/Contents/Info.plist" 2>/dev/null || true)"
@@ -50,6 +54,49 @@ common_dir() {
   echo "Candidate and installed checkout must share the same canonical Git object store." >&2
   exit 78
 }
+
+# A real self-update test is invalid if another launchd owner can respawn the
+# menu app. This catches stale launchctl-submit jobs and manual/alternate app
+# owners before we revoke the live bridge. Only the canonical product labels are
+# allowed, and the live menu PID must be the HTTP LaunchAgent PID.
+DOMAIN="gui/$(id -u)"
+CANONICAL_LABEL="io.github.dcierra.darwinrelay.http"
+LAUNCHD_LABELS="$(launchctl print "$DOMAIN" 2>/dev/null \
+  | grep -Eio '[A-Za-z0-9._-]*darwinrelay[A-Za-z0-9._-]*' \
+  | sort -u || true)"
+UNEXPECTED_LABELS=""
+while IFS= read -r label; do
+  [[ -n "$label" ]] || continue
+  case "$label" in
+    io.github.dcierra.darwinrelay.http|io.github.dcierra.darwinrelay.tunnel) ;;
+    *) UNEXPECTED_LABELS+="${label}\n" ;;
+  esac
+done <<<"$LAUNCHD_LABELS"
+if [[ -n "$UNEXPECTED_LABELS" ]]; then
+  echo "Refusing candidate test while competing DarwinRelay launchd labels exist:" >&2
+  printf '%b' "$UNEXPECTED_LABELS" >&2
+  exit 78
+fi
+CANONICAL_OUT="$(launchctl print "$DOMAIN/$CANONICAL_LABEL" 2>/dev/null)" || {
+  echo "Canonical DarwinRelay HTTP LaunchAgent is not loaded." >&2
+  exit 78
+}
+CANONICAL_STATE="$(printf '%s\n' "$CANONICAL_OUT" | awk '$1=="state" && $2=="=" {print $3; exit}')"
+CANONICAL_PID="$(printf '%s\n' "$CANONICAL_OUT" | awk '$1=="pid" && $2=="=" {print $3; exit}')"
+[[ "$CANONICAL_STATE" == "running" && "$CANONICAL_PID" =~ ^[0-9]+$ && "$CANONICAL_PID" -ge 2 ]] || {
+  echo "Canonical DarwinRelay HTTP LaunchAgent is not running with a valid PID." >&2
+  exit 78
+}
+MENU_PIDS="$(ps -axo pid=,command= | awk '$2 ~ /\/DarwinRelay\.app\/Contents\/MacOS\/DarwinRelay$/ {print $1}')"
+[[ "$(printf '%s\n' "$MENU_PIDS" | awk 'NF{n++} END{print n+0}')" == 1 && "$MENU_PIDS" == "$CANONICAL_PID" ]] || {
+  echo "Refusing candidate test: live DarwinRelay menu ownership does not match the canonical LaunchAgent." >&2
+  printf 'canonical pid=%s; menu pid(s)=%s\n' "$CANONICAL_PID" "${MENU_PIDS:-<none>}" >&2
+  exit 78
+}
+if [[ "$MODE" == "preflight" ]]; then
+  printf 'Candidate environment preflight passed: canonical LaunchAgent pid %s is the only DarwinRelay owner.\n' "$CANONICAL_PID"
+  exit 0
+fi
 
 CANDIDATE_SHA="$(git -C "$CANDIDATE_ROOT" rev-parse HEAD)"
 OLD_SHA="$(git -C "$PROD_ROOT" rev-parse HEAD)"
