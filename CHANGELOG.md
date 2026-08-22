@@ -4,6 +4,7 @@ All notable public DarwinRelay changes will be documented here.
 
 ## Unreleased
 
+- Fixed the manual update transaction discovered during the real v0.6.6 → v0.6.7 validation: deploy process discovery now snapshots `ps` before running its matcher so the matcher cannot identify its own argv as `mcp-http.mjs`; the updater invokes app deployment in an explicit stopped-runtime mode rather than applying zero-downtime PID invariants; and rollback restores/rebuilds the old app based on actual bundle versions instead of a post-success flag.
 ## 0.6.7 — 2026-08-22
 
 - Fixed manual-updater restart ownership: after installing a target app the transaction re-runs the verified target kill-switch, terminates any standalone DarwinRelay menu instance that appeared during the install window, and requires the HTTP LaunchAgent to be `state=running` with a live DarwinRelay PID before health/doctor success. Rollback uses the same bounded menu-process reclamation.

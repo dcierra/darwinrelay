@@ -42,4 +42,19 @@ source "$ROOT/scripts/deploy-menubar-update.sh"
 [[ "$(pid_for_recorded_executable "$DATA/cloudflared.pid" cloudflared)" == "103" ]]
 [[ -z "$(pid_for_process_name DefinitelyMissingProcess)" ]]
 
+# Reproduce the real self-match race deterministically: an upstream ps wrapper
+# waits long enough for a downstream `awk -v needle=...` to exist, then snapshots
+# the real process table. The old direct `ps | awk` implementation matched that
+# awk process because its argv contained the needle. Snapshot-before-match must
+# return empty for a path that no real runtime uses.
+cat > "$TMP/ps-live" <<'SH'
+#!/bin/bash
+sleep 0.15
+exec /bin/ps "$@"
+SH
+chmod +x "$TMP/ps-live"
+PS_BIN="$TMP/ps-live"
+SELF_NEEDLE="/tmp/darwinrelay-no-runtime-$PPID-$$/mcp-http.mjs"
+[[ -z "$(pid_for_command_contains "$SELF_NEEDLE")" ]]
+
 echo "deploy menubar pid discovery test passed"
