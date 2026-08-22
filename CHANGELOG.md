@@ -4,6 +4,7 @@ All notable public DarwinRelay changes will be documented here.
 
 ## Unreleased
 
+- Fixed manual-updater restart ownership: after installing a target app the transaction re-runs the verified target kill-switch, terminates any standalone DarwinRelay menu instance that appeared during the install window, and requires the HTTP LaunchAgent to be `state=running` with a live DarwinRelay PID before health/doctor success. Rollback uses the same bounded menu-process reclamation.
 ## 0.6.6 — 2026-08-22
 
 - Fixed process ownership for manual updates and the kill switch: DarwinRelay now reclaims/verifies only the `cloudflared` process recorded in its own pidfile instead of treating unrelated tunnels on the Mac as survivors, deploy PID checks use the same ownership boundary, and the updater verifies/uses the target release's `disable.sh` before changing HEAD so a newer release can repair containment logic in an older installation.

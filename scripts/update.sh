@@ -60,6 +60,73 @@ latest_stable_tag_from_origin() {
     | /usr/bin/awk '{print $4}'
 }
 
+darwinrelay_menu_pids() {
+  local ps_bin="${PS_BIN:-$(command -v ps 2>/dev/null || true)}"
+  [[ -n "$ps_bin" && -x "$ps_bin" ]] || return 69
+  "$ps_bin" -axo pid=,command= | /usr/bin/awk '$2 ~ /\/DarwinRelay\.app\/Contents\/MacOS\/DarwinRelay$/ {print $1}'
+}
+
+stop_all_menu_instances() {
+  local pid attempts survivors
+  while IFS= read -r pid; do
+    if ! [[ "$pid" =~ ^[0-9]+$ ]] || (( pid < 2 )); then
+      continue
+    fi
+    kill -TERM "$pid" 2>/dev/null || true
+  done < <(darwinrelay_menu_pids)
+
+  attempts=50
+  while (( attempts > 0 )); do
+    survivors="$(darwinrelay_menu_pids)"
+    [[ -z "$survivors" ]] && return 0
+    sleep 0.1
+    attempts=$((attempts - 1))
+  done
+
+  while IFS= read -r pid; do
+    if ! [[ "$pid" =~ ^[0-9]+$ ]] || (( pid < 2 )); then
+      continue
+    fi
+    kill -KILL "$pid" 2>/dev/null || true
+  done <<<"$survivors"
+
+  attempts=20
+  while (( attempts > 0 )); do
+    survivors="$(darwinrelay_menu_pids)"
+    [[ -z "$survivors" ]] && return 0
+    sleep 0.1
+    attempts=$((attempts - 1))
+  done
+  printf 'DarwinRelay menu instance(s) survived SIGKILL: %s\n' "$(echo "$survivors" | tr '\n' ' ')" >&2
+  return 1
+}
+
+launchagent_running_pid() { # domain, label
+  local domain="$1" label="$2" launchctl_bin out state pid
+  launchctl_bin="${LAUNCHCTL_BIN:-$(command -v launchctl 2>/dev/null || true)}"
+  [[ -n "$launchctl_bin" && -x "$launchctl_bin" ]] || return 69
+  out="$("$launchctl_bin" print "$domain/$label" 2>/dev/null)" || return 1
+  state="$(printf '%s\n' "$out" | /usr/bin/awk '$1 == "state" && $2 == "=" {print $3; exit}')"
+  pid="$(printf '%s\n' "$out" | /usr/bin/awk '$1 == "pid" && $2 == "=" {print $3; exit}')"
+  [[ "$state" == "running" && "$pid" =~ ^[0-9]+$ ]] || return 1
+  (( pid >= 2 )) || return 1
+  printf '%s\n' "$pid"
+}
+
+wait_launchagent_running() { # domain, label
+  local domain="$1" label="$2" attempts=100 pid
+  while (( attempts > 0 )); do
+    pid="$(launchagent_running_pid "$domain" "$label" || true)"
+    if [[ -n "$pid" ]]; then
+      printf '%s\n' "$pid"
+      return 0
+    fi
+    sleep 0.2
+    attempts=$((attempts - 1))
+  done
+  return 1
+}
+
 if [[ "${DARWINRELAY_UPDATE_LIBRARY_ONLY:-0}" == "1" ]]; then
   if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
     return 0
@@ -215,7 +282,7 @@ chmod 700 "$TARGET_DISABLE_SCRIPT"
 DOMAIN="gui/$(id -u)"
 SERVICE_LABEL="io.github.dcierra.darwinrelay.http"
 SERVICE_PLIST="$HOME/Library/LaunchAgents/$SERVICE_LABEL.plist"
-OLD_MENU_PID="$(ps -axo pid=,command= | awk '$2 ~ /\/DarwinRelay\.app\/Contents\/MacOS\/DarwinRelay$/ {if(!p)p=$1} END{print p}')"
+OLD_MENU_PID="$(darwinrelay_menu_pids | /usr/bin/awk 'NR==1{print; exit}')"
 APP_SWAPPED=0
 ROLLING_BACK=0
 
@@ -238,11 +305,9 @@ rollback_update() {
   echo
   echo "Update failed; rolling back to $OLD_TAG..." >&2
 
+  DARWINRELAY_INSTALL_DIR="$ROOT" "$TARGET_DISABLE_SCRIPT" >/dev/null 2>&1 || true
   launchctl bootout "$DOMAIN/$SERVICE_LABEL" >/dev/null 2>&1 || true
-  for pid in $(ps -axo pid=,command= | awk '$2 ~ /\/DarwinRelay\.app\/Contents\/MacOS\/DarwinRelay$/ {print $1}'); do
-    kill -TERM "$pid" 2>/dev/null || true
-  done
-  sleep 1
+  stop_all_menu_instances || true
 
   if (( APP_SWAPPED == 1 )) && [[ -d "$APP_DIR/.DarwinRelay.app.rollback" ]]; then
     DARWINRELAY_APP_INSTALL_DIR="$APP_DIR" "$ROOT/scripts/rollback-menubar-update.sh" || true
@@ -264,14 +329,8 @@ trap 'rollback_update 130' INT TERM
 # Stop before replacing source files. This is deliberately fail-closed: no MCP
 # mutation authority remains live while the checkout is between release states.
 DARWINRELAY_INSTALL_DIR="$ROOT" "$TARGET_DISABLE_SCRIPT"
-if [[ -n "$OLD_MENU_PID" ]] && kill -0 "$OLD_MENU_PID" 2>/dev/null; then
-  kill -TERM "$OLD_MENU_PID" 2>/dev/null || true
-  attempts=50
-  while kill -0 "$OLD_MENU_PID" 2>/dev/null && (( attempts > 0 )); do
-    sleep 0.1
-    attempts=$((attempts - 1))
-  done
-  kill -0 "$OLD_MENU_PID" 2>/dev/null && kill -KILL "$OLD_MENU_PID" 2>/dev/null || true
+if [[ -n "$OLD_MENU_PID" ]] || [[ -n "$(darwinrelay_menu_pids)" ]]; then
+  stop_all_menu_instances
 fi
 
 # Only after authority is stopped do source and installed app move to the target.
@@ -282,6 +341,13 @@ APP_SWAPPED=1
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" == "$TARGET_VERSION" ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_DIR/.DarwinRelay.app.rollback/Contents/Info.plist")" == "$OLD_VERSION" ]]
 
+# Installing/replacing an app bundle can race with a pre-existing LaunchServices or
+# manually launched menu instance. Re-establish a contained baseline immediately
+# before launchd ownership: stop any runtime that appeared during the build/install
+# window, then prove every standalone DarwinRelay menu instance is gone.
+DARWINRELAY_INSTALL_DIR="$ROOT" "$TARGET_DISABLE_SCRIPT"
+stop_all_menu_instances
+
 DARWINRELAY_APP_PATH="$APP" DARWINRELAY_HTTP_AUTOSTART_LOAD_NOW=0 ./scripts/install-http-autostart.sh >/dev/null
 plutil -lint "$SERVICE_PLIST" >/dev/null
 if grep -Fq '<key>WorkingDirectory</key>' "$SERVICE_PLIST"; then
@@ -290,8 +356,10 @@ if grep -Fq '<key>WorkingDirectory</key>' "$SERVICE_PLIST"; then
 fi
 
 launchctl bootout "$DOMAIN/$SERVICE_LABEL" >/dev/null 2>&1 || true
-launchctl bootstrap "$DOMAIN" "$SERVICE_PLIST"
 launchctl enable "$DOMAIN/$SERVICE_LABEL"
+launchctl bootstrap "$DOMAIN" "$SERVICE_PLIST"
+LAUNCHAGENT_PID="$(wait_launchagent_running "$DOMAIN" "$SERVICE_LABEL")"
+[[ "$(darwinrelay_menu_pids | /usr/bin/awk -v pid="$LAUNCHAGENT_PID" '$1 == pid {print $1; exit}')" == "$LAUNCHAGENT_PID" ]]
 wait_health
 
 DOCTOR_OUT="$(./scripts/doctor.sh --transport http)"
@@ -304,6 +372,7 @@ printf '%s\n' "$DOCTOR_OUT"
 trap - ERR INT TERM
 printf '\nDarwinRelay update complete: %s -> %s\n' "$OLD_TAG" "$TARGET_TAG"
 printf 'Checkout and app are aligned at %s; rollback app retained at %s/.DarwinRelay.app.rollback\n' "$TARGET_VERSION" "$APP_DIR"
+printf 'HTTP LaunchAgent owns the live menu runtime (pid %s).\n' "$LAUNCHAGENT_PID"
 if [[ "$OLD_EXTENSION_VERSION" != "$TARGET_EXTENSION_VERSION" ]]; then
   printf '\nBackground Chrome extension files changed (%s -> %s).\n' "$OLD_EXTENSION_VERSION" "$TARGET_EXTENSION_VERSION"
   printf 'Reload "DarwinRelay Background Browser" from the Extensions page in the dedicated DarwinRelay Chrome profile, then rerun ./scripts/doctor.sh.\n'
