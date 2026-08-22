@@ -124,22 +124,35 @@ Optional capabilities:
 - Google Chrome — only for the managed `chrome_*` background workspace;
 - Codex CLI/history — only for `codex_thread_*` continuity tools.
 
-### 2. Build from source
+### 2. Choose an install path
 
-If you already use a local coding agent such as Codex, Claude Code, or another tool with shell/filesystem access, the easiest path is to give it this repository and ask it to perform the source install for you:
+#### Option A — Install with a local coding agent
+
+Already use Codex, Claude Code, or another local coding agent with shell/filesystem access? Let it perform the self-build for you:
 
 ```text
-Install DarwinRelay on this Mac from the canonical repository:
+Install DarwinRelay on this Mac from:
 https://github.com/dcierra/darwinrelay
 
-Read AGENTS.md first. Use the documented source-first/self-build path, do not
-weaken any security controls, do not use my personal Chrome profile, and stop
-for any macOS permission or consent step that requires me to approve it.
-When installation is complete, verify the local runtime and tell me exactly
-what remains for connecting ChatGPT.
+Read AGENTS.md and the installation documentation first.
+
+Install or verify the required dependencies, then build and install DarwinRelay
+using the documented source-first/self-build path. Configure everything that
+can be configured without weakening the project's security model.
+
+Do not bypass macOS security controls. Do not use my personal Chrome profile.
+
+When macOS requires Accessibility, Screen Recording, Input/Post Events, Full
+Disk Access, Keychain access, or another user-consent step, stop and tell me
+exactly what I need to approve manually.
+
+After installation, verify that DarwinRelay starts correctly and report what
+remains to connect it to my MCP client.
 ```
 
-Or run the same steps yourself:
+The agent should follow the repository rather than guess. If this path exposes an ambiguous dependency, build step, or permission handoff, that is an onboarding bug to fix in DarwinRelay's scripts/docs rather than something to paper over with a longer prompt.
+
+#### Option B — Install manually
 
 ```bash
 git clone https://github.com/dcierra/darwinrelay.git

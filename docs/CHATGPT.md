@@ -18,26 +18,39 @@ DarwinRelay can expose read, write, and execute tools; ChatGPT decides which of 
 
 This guide uses a normal ChatGPT conversation with a custom app. OpenAI currently documents that the separate **Agent mode** feature does not use custom apps.
 
-## 1. Build DarwinRelay from source
+## 1. Install DarwinRelay
 
 Requirements:
 
 - macOS 13 or newer;
 - Node.js 18 or newer;
 - Xcode Command Line Tools / `swiftc`;
-- `cloudflared` on the login-shell `PATH` for the normal Server URL path described below.
+- `cloudflared` on the login-shell `PATH` for the Server URL path described below.
 
-If you already have a local coding agent with shell/filesystem access, you can hand it the installation instead of typing the build steps yourself:
+### Option A — Install with a local coding agent
+
+If you already use Codex, Claude Code, or another local coding agent with shell/filesystem access, give it this repository and let it perform the self-build:
 
 ```text
-Install DarwinRelay on this Mac from https://github.com/dcierra/darwinrelay.
-Read AGENTS.md first. Follow the documented source-first/self-build path.
-Do not weaken security controls or use a personal Chrome profile. Stop and ask
-me whenever macOS requires a permission or consent action from the user. Verify
-the runtime when finished and tell me what remains for the ChatGPT connection.
+Install DarwinRelay on this Mac from:
+https://github.com/dcierra/darwinrelay
+
+Read AGENTS.md and the installation documentation first.
+Install or verify required dependencies, then build and install DarwinRelay
+using the documented source-first/self-build path.
+
+Do not bypass macOS security controls. Do not use my personal Chrome profile.
+Stop and ask me whenever macOS requires Accessibility, Screen Recording,
+Input/Post Events, Full Disk Access, Keychain access, or another user-consent
+action. Tell me exactly what I need to approve manually.
+
+After installation, verify that DarwinRelay starts correctly and report what
+remains to connect it to my MCP client.
 ```
 
-Or build and install the local menu app manually:
+The desired behavior is `agent -> documented install -> explicit user consent handoff`, not an agent inventing workarounds. Any step where a capable local agent has to guess should be treated as a DarwinRelay onboarding/script issue.
+
+### Option B — Install manually
 
 ```bash
 git clone https://github.com/dcierra/darwinrelay.git

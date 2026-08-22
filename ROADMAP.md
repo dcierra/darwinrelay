@@ -38,6 +38,7 @@ The locally built menu app may live in `/Applications` while intentionally resol
 Current priorities:
 
 - reproducible fresh installs with no maintainer-machine assumptions;
+- validate the agent-assisted install path on a clean/typical setup: `agent prompt -> clone -> dependencies -> build -> app install -> macOS consent handoff -> bridge start/verify`; if the agent has to guess, improve the scripts/docs instead of expanding the prompt;
 - make the source-checkout ↔ locally built app relationship explicit and reliable;
 - keep generic build/install separate from transport-specific setup such as the OpenAI Secure MCP Tunnel installer;
 - reliable autostart, singleton ownership, shutdown, and orphan reclamation;
