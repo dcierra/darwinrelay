@@ -93,7 +93,7 @@ Open the **DR** menu and choose **Copy ChatGPT Setup**. Keep the copied bearer t
 OpenAI's current UI calls custom MCP integrations **Apps**. Depending on plan and workspace role, developer mode is enabled from workspace settings or from **Settings → Apps → Advanced Settings**, and a custom app is created from **Apps → Create**. Follow the current OpenAI documentation if the labels differ in your account.
 
 > [!NOTE]
-> The clipboard text in DarwinRelay v0.6.2 still starts with older `Plugins → New Plugin` wording. Use the current **Apps → Create** flow instead; the endpoint/OAuth values in the clipboard payload are still the values DarwinRelay exposes. Updating that menu copy is tracked as onboarding work.
+> If an older installed DarwinRelay build still copies `Plugins → New Plugin`, use the current **Apps → Create** flow instead. Current source builds use Apps terminology; the endpoint/OAuth values are unchanged.
 
 Create the app with the DarwinRelay values. When the corresponding fields are shown, the current HTTP/OAuth path uses:
 
@@ -199,15 +199,16 @@ Run:
 ./scripts/doctor.sh
 ```
 
-The current doctor reports transport, LaunchAgent, token-source, logs, and Full Disk Access state. It is not yet the final onboarding health gate.
-
-The product target is a doctor that reports separate groups instead of treating every optional capability as a failed installation:
+The doctor reports a blocking core verdict separately from optional capability planes:
 
 ```text
-Core / ChatGPT coding path    READY | ACTION REQUIRED
+Core / MCP coding path        READY | ACTION REQUIRED
 Native desktop               READY | OPTIONAL / ACTION REQUIRED
+Protected filesystem (FDA)   READY | OPTIONAL / ACTION REQUIRED
 Background Chrome            READY | OPTIONAL / ACTION REQUIRED
 Codex continuity             READY | OPTIONAL / NOT CONFIGURED
 ```
 
-For each failed core check it should name the exact failing component and the next action. This requirement is tracked in [ROADMAP.md](../ROADMAP.md).
+For the HTTP/Server URL path it verifies Node/runtime/app consistency, the full-access latch while running, local HTTP health, token-file permissions, and a real authenticated `initialize → bridge_status` call. Blocking failures name a concrete next action; missing optional desktop/FDA/Chrome/Codex capabilities do not turn a working core shell/filesystem path into a failed installation.
+
+The roadmap still tracks deeper stale-lifecycle/public-origin/browser diagnostics and clean-install validation.

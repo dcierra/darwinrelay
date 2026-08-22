@@ -4,10 +4,12 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import os from "node:os";
 import fsp from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const execFileAsync = promisify(execFile);
 const TARGET = process.argv[2] || path.join(ROOT, "mcp-http.mjs");
 const BRIDGE = path.join(ROOT, "bridge.mjs");
 
@@ -139,6 +141,21 @@ try {
   assert.ok(init.result?.serverInfo?.name);
   assert.equal((await rpc({ jsonrpc: "2.0", method: "notifications/initialized" })).status, 202);
   ok("initialize + initialized notification");
+
+  // doctor.sh uses this helper for a real local initialize -> bridge_status smoke
+  // without placing the bearer token in argv or the environment. Pin that path
+  // against the same real HTTP front end used by the rest of this suite.
+  const probeTokenFile = path.join(dataDir, "doctor-http-token");
+  await fsp.writeFile(probeTokenFile, `${TOKEN}\n`, { mode: 0o600 });
+  const probed = await execFileAsync(process.execPath, [
+    path.join(ROOT, "scripts", "probe-bridge-status.mjs"),
+    "--http-port", String(PORT),
+    "--token-file", probeTokenFile,
+  ], { timeout: 15_000, maxBuffer: 4_000_000 });
+  assert.equal(probed.stderr, "");
+  const probedStatus = JSON.parse(probed.stdout);
+  assert.equal(probedStatus.bridgeVersion, JSON.parse(await fsp.readFile(path.join(ROOT, "package.json"), "utf8")).version);
+  ok("doctor HTTP bridge_status probe uses a token file and reaches the real bridge");
 
   // --- DEFECT 1: concurrent identical client ids must not cross ------------
   // Two callers both use id:1. Each must get its own result back, with id:1.

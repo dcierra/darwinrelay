@@ -202,7 +202,7 @@ For troubleshooting, run:
 ./scripts/doctor.sh
 ```
 
-The current doctor is useful but not yet the final first-run health gate; the roadmap tracks work to separate core readiness from optional desktop/browser capabilities and provide exact remediation for each failure.
+The doctor now gives a blocking **Core / MCP coding path** verdict separately from optional native-desktop, protected-filesystem, background-Chrome, and Codex capabilities. It performs a real local `initialize → bridge_status` smoke check for the selected transport and prints the next action for blocking failures. Deeper lifecycle/browser diagnostics continue to evolve in the roadmap.
 
 ### Source-only local MCP usage
 

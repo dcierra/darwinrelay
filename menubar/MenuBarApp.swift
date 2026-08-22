@@ -344,7 +344,8 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let tunnelModeMenuItem = NSMenuItem(title: "Tunnel: —", action: nil, keyEquivalent: "")
     private let startStopItem = NSMenuItem(title: "Start", action: nil, keyEquivalent: "")
     private let strictApprovalsItem = NSMenuItem(title: "Strict approvals", action: nil, keyEquivalent: "")
-    private let desktopPermissionsItem = NSMenuItem(title: "Desktop: checking permissions…", action: nil, keyEquivalent: "")
+    private let desktopPermissionsItem = NSMenuItem(title: "Native desktop: checking permissions…", action: nil, keyEquivalent: "")
+    private let protectedFilesItem = NSMenuItem(title: "Protected files (FDA): checking…", action: nil, keyEquivalent: "")
     private var desktopPermissionCache: (ax: Bool, screen: Bool, input: Bool)?
     private var fdaPermissionCache: Bool?
     private var desktopPermissionRefreshInFlight = false
@@ -562,10 +563,15 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(statusMenuItem)
 
         desktopPermissionsItem.target = self
-        desktopPermissionsItem.action = #selector(openDesktopPermissions)
-        desktopPermissionsItem.toolTip = "Accessibility drives native controls; Screen Recording captures pixels; Input event permission gates synthesized mouse/keyboard events; Full Disk Access affects protected filesystem paths. Click to open Privacy & Security."
-        setSymbol("display", on: desktopPermissionsItem, description: "Desktop permissions")
+        desktopPermissionsItem.action = #selector(openMissingDesktopPermission)
+        setSymbol("display", on: desktopPermissionsItem, description: "Native desktop permissions")
         menu.addItem(desktopPermissionsItem)
+
+        protectedFilesItem.target = self
+        protectedFilesItem.action = #selector(openFullDiskAccessSettings)
+        protectedFilesItem.toolTip = "Full Disk Access is optional unless a task needs macOS-protected filesystem locations. Click to open Full Disk Access settings."
+        setSymbol("externaldrive.badge.checkmark", on: protectedFilesItem, description: "Protected filesystem permission")
+        menu.addItem(protectedFilesItem)
 
         strictApprovalsItem.target = self
         strictApprovalsItem.action = #selector(toggleStrictApprovals)
@@ -621,9 +627,17 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let diagnosticsMenu = NSMenu()
         diagnosticsMenu.autoenablesItems = false
 
-        let privacy = NSMenuItem(title: "Open Privacy & Security…", action: #selector(openDesktopPermissions), keyEquivalent: "")
-        privacy.target = self
-        diagnosticsMenu.addItem(privacy)
+        let accessibility = NSMenuItem(title: "Open Accessibility Settings", action: #selector(openAccessibilitySettings), keyEquivalent: "")
+        accessibility.target = self
+        diagnosticsMenu.addItem(accessibility)
+
+        let screenRecording = NSMenuItem(title: "Open Screen Recording Settings", action: #selector(openScreenRecordingSettings), keyEquivalent: "")
+        screenRecording.target = self
+        diagnosticsMenu.addItem(screenRecording)
+
+        let fullDiskAccess = NSMenuItem(title: "Open Full Disk Access Settings", action: #selector(openFullDiskAccessSettings), keyEquivalent: "")
+        fullDiskAccess.target = self
+        diagnosticsMenu.addItem(fullDiskAccess)
 
         let logs = NSMenuItem(title: "Open Logs", action: #selector(openLogs), keyEquivalent: "")
         logs.target = self
@@ -687,11 +701,11 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
             healthMenuItem.title = "All systems operational"
             setSymbol("checkmark.circle.fill", on: healthMenuItem, description: "All systems operational")
         case .running where permissionsKnown:
-            healthMenuItem.title = "Running · desktop permissions need attention"
-            setSymbol("exclamationmark.triangle.fill", on: healthMenuItem, description: "Desktop permissions need attention")
+            healthMenuItem.title = "Core ready · optional permissions not configured"
+            setSymbol("checkmark.circle", on: healthMenuItem, description: "Core runtime ready; optional permissions are not configured")
         case .running:
-            healthMenuItem.title = "Running · checking desktop permissions…"
-            setSymbol("checkmark.circle", on: healthMenuItem, description: "Running")
+            healthMenuItem.title = "Core ready · checking optional permissions…"
+            setSymbol("checkmark.circle", on: healthMenuItem, description: "Core runtime ready")
         case .starting:
             healthMenuItem.title = "Starting DarwinRelay…"
             setSymbol("arrow.triangle.2.circlepath", on: healthMenuItem, description: "Starting DarwinRelay")
@@ -699,8 +713,8 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
             healthMenuItem.title = "Ready · bridge is stopped"
             setSymbol("checkmark.circle", on: healthMenuItem, description: "Ready")
         case .stopped:
-            healthMenuItem.title = permissionsKnown ? "Stopped · desktop permissions need attention" : "Stopped · checking permissions…"
-            setSymbol("pause.circle", on: healthMenuItem, description: "DarwinRelay stopped")
+            healthMenuItem.title = permissionsKnown ? "Ready to start · optional permissions not configured" : "Ready to start · checking optional permissions…"
+            setSymbol("pause.circle", on: healthMenuItem, description: "DarwinRelay stopped and ready to start")
         case .failed:
             healthMenuItem.title = "Action required"
             setSymbol("exclamationmark.triangle.fill", on: healthMenuItem, description: "DarwinRelay needs attention")
@@ -744,7 +758,18 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
             ? "Scoped short-lived approvals are required for websites and foreground desktop mutations."
             : "Default mode: DarwinRelay may use configured browser/desktop capabilities without per-site/per-app approval files."
 
-        desktopPermissionsItem.title = "Desktop: AX \(mark(desktopPermissionCache?.ax)) · Screen \(mark(desktopPermissionCache?.screen)) · Input \(mark(desktopPermissionCache?.input)) · FDA \(mark(fdaPermissionCache))"
+        desktopPermissionsItem.title = "Native desktop: AX \(mark(desktopPermissionCache?.ax)) · Screen \(mark(desktopPermissionCache?.screen)) · Input \(mark(desktopPermissionCache?.input))"
+        protectedFilesItem.title = "Protected files (FDA): \(mark(fdaPermissionCache))"
+        switch nextMissingPermission() {
+        case .accessibility:
+            desktopPermissionsItem.toolTip = "Accessibility or Input/Post Events is missing. Click to request it and open Accessibility settings."
+        case .screenRecording:
+            desktopPermissionsItem.toolTip = "Screen Recording is missing. Click to request it and open Screen Recording settings."
+        case .unknown:
+            desktopPermissionsItem.toolTip = "Permission state is still loading. Click to refresh; DarwinRelay will not guess which pane is missing."
+        case .none:
+            desktopPermissionsItem.toolTip = "Native desktop permissions are granted."
+        }
     }
 
     // MARK: Actions
@@ -790,30 +815,29 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
         notify("Copied OAuth Client ID", "Goes in ChatGPT's OAuth Client ID field.")
     }
 
-    /// Everything needed to fill in ChatGPT's New Plugin dialog, in order.
+    /// Everything needed to create DarwinRelay through ChatGPT's current Apps flow.
     @objc private func copySetup() {
         guard let url = publicURL else {
             notify("No public URL yet", "Press Start and wait for cloudflared.")
             return
         }
         let text = """
-        ChatGPT → Plugins → + → New Plugin
+        ChatGPT → Settings → Apps → Create
+        Enable Developer mode if ChatGPT asks for it. UI labels can vary by plan,
+        workspace role, and rollout; use the current Apps/create flow in your account.
 
         Connection:            Server URL
-        Server URL:            \(url)/mcp
+        Endpoint / Server URL: \(url)/mcp
         Authentication:        OAuth
-        Registration method:   User-Defined OAuth Client
+        Registration method:   User-defined OAuth client
         OAuth Client ID:       \(clientId)
         OAuth Client Secret:   (leave blank)
         Token endpoint auth:   none
-        Default scopes:        mcp
-        OIDC enabled:          UNTICK IT
+        Scope:                  mcp
+        OIDC:                   off / disabled
 
-        Untick OIDC: /.well-known/openid-configuration is served only as an alias of
-        the OAuth metadata and omits every signing and subject field, so no ID token
-        is issued. Leaving it on invites ChatGPT to request scopes we do not advertise.
-
-        Tick "I understand and want to continue", then Create.
+        DarwinRelay does not issue an ID token. If the form offers OIDC, leave it off.
+        Scan the tools, review the requested actions, then Create/Save the app.
 
         ChatGPT opens a consent page in your browser. It asks for this machine's
         bearer token, which is how it knows the approval came from you:
@@ -829,7 +853,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func rotateToken() {
         let alert = NSAlert()
         alert.messageText = "Rotate the bearer token?"
-        alert.informativeText = "The current token stops working immediately. You will have to paste the new one into the ChatGPT plugin. The bridge restarts if it is running."
+        alert.informativeText = "The current token stops working immediately. You will have to approve the ChatGPT app again with the new token. The bridge restarts if it is running."
         alert.addButton(withTitle: "Rotate")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -930,10 +954,56 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    @objc private func openDesktopPermissions() {
-        requestDesktopHelperPermissions()
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") else { return }
+    private enum MissingPermission {
+        case accessibility
+        case screenRecording
+        case unknown
+        case none
+    }
+
+    private func nextMissingPermission() -> MissingPermission {
+        guard let desktop = desktopPermissionCache else { return .unknown }
+        // MacUIHelper uses CGPreflightPostEventAccess/CGRequestPostEventAccess for
+        // synthesized input. On the supported macOS path that authority is surfaced
+        // with Accessibility, so AX and Post Events share the same remediation pane.
+        if !desktop.ax || !desktop.input { return .accessibility }
+        if !desktop.screen { return .screenRecording }
+        return .none
+    }
+
+    private func openPrivacyPane(_ anchor: String) {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    @objc private func openAccessibilitySettings() {
+        requestDesktopHelperPermissions()
+        openPrivacyPane("Privacy_Accessibility")
+    }
+
+    @objc private func openScreenRecordingSettings() {
+        requestDesktopHelperPermissions()
+        openPrivacyPane("Privacy_ScreenCapture")
+    }
+
+    @objc private func openFullDiskAccessSettings() {
+        openPrivacyPane("Privacy_AllFiles")
+    }
+
+    @objc private func openMissingDesktopPermission() {
+        switch nextMissingPermission() {
+        case .accessibility:
+            openAccessibilitySettings()
+        case .screenRecording:
+            openScreenRecordingSettings()
+        case .unknown:
+            refreshDesktopPermissions()
+            notify("Checking permissions", "Reopen the menu after the status refresh; DarwinRelay will open the specific missing permission instead of guessing.")
+        case .none:
+            // Native desktop is complete. FDA is intentionally a separate optional
+            // capability with its own row and action.
+            notify("Native desktop ready", "Accessibility, Screen Recording, and Input/Post Events are granted.")
+        }
     }
 
     @objc private func openLogs() {

@@ -188,7 +188,7 @@ try {
   assert.equal(query.optimizedSearchUsed, true);
   assert.match(query.observationId, /^uiobs_/);
 
-  const cursor = structured(await tool("cursor", "ui_cursor", { action: "move", x: 11, y: 22, duration_ms: 0 }));
+  const cursor = structured(await tool("cursor", "ui_cursor", { action: "move", x: 11, y: 22, duration_ms: 0, auto_hide_ms: 0 }));
   assert.equal(cursor.visible, true);
   assert.equal(cursor.physicalCursorMoved, false);
 
@@ -311,6 +311,22 @@ try {
   assert.equal(sequence.result.structuredContent.stepCount, 3);
   assert.equal(sequence.result.structuredContent.results[2].result.target.virtualCursor.x, 11);
   assert.match(sequence.result.structuredContent.observationId, /^uiobs_/);
+
+  // Normal cursor moves are transient: the overlay must not remain on the
+  // operator's desktop indefinitely after an agent stops using it. Explicit
+  // show is the opt-in persistent mode and explicit hide still wins immediately.
+  const transientCursor = structured(await tool("cursor-transient", "ui_cursor", { action: "move", x: 33, y: 44, duration_ms: 0, auto_hide_ms: 40 }));
+  assert.equal(transientCursor.visible, true);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const autoHiddenCursor = structured(await tool("cursor-auto-hidden", "ui_cursor", { action: "status" }));
+  assert.equal(autoHiddenCursor.visible, false);
+
+  structured(await tool("cursor-show", "ui_cursor", { action: "show", x: 55, y: 66 }));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const persistentCursor = structured(await tool("cursor-persistent", "ui_cursor", { action: "status" }));
+  assert.equal(persistentCursor.visible, true);
+  const hiddenCursor = structured(await tool("cursor-hide", "ui_cursor", { action: "hide" }));
+  assert.equal(hiddenCursor.visible, false);
 
   const audit = await fs.readFile(auditFile, "utf8");
   assert.doesNotMatch(audit, /STRICT_SECRET/);
