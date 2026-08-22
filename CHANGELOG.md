@@ -4,6 +4,8 @@ All notable public DarwinRelay changes will be documented here.
 
 ## Unreleased
 
+## 0.6.7 — 2026-08-22
+
 - Fixed manual-updater restart ownership: after installing a target app the transaction re-runs the verified target kill-switch, terminates any standalone DarwinRelay menu instance that appeared during the install window, and requires the HTTP LaunchAgent to be `state=running` with a live DarwinRelay PID before health/doctor success. Rollback uses the same bounded menu-process reclamation.
 ## 0.6.6 — 2026-08-22
 
