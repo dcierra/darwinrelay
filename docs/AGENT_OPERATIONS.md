@@ -184,6 +184,19 @@ When enabled from the menu app:
 
 Do not attempt to bypass Strict mode through shell, environment tricks, another browser route or stale approval files.
 
+## Updating an installed runtime
+
+For a source-first installation, use the repository's manual updater from an independent local shell:
+
+```bash
+cd /path/to/darwinrelay
+./scripts/update.sh
+```
+
+Do not run a self-update as a long mutation chain owned only by the DarwinRelay MCP connection being restarted. `scripts/update.sh` verifies a canonical clean release checkout, moves source and app together, refreshes the HTTP LaunchAgent, stops fail-closed, waits for `/healthz`, runs the authenticated doctor, and rolls back on failure. Use `--yes` only when the operator has already explicitly approved the restart.
+
+After reconnect, call `bridge_status` and confirm the installed app/runtime versions match. If the release changes the unpacked background-Chrome extension, reload **DarwinRelay Background Browser** only in the dedicated DarwinRelay Chrome profile and verify `backgroundChrome.extension.version` plus a background tab smoke test.
+
 ## Common failure states
 
 ### `UI_ELEMENT_STALE`

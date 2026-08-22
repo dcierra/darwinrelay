@@ -172,6 +172,27 @@ For a compile/sign smoke test with **no installation side effect**, use:
 DARWINRELAY_APP_OUTPUT=/tmp/DarwinRelay.app ./menubar/build.sh --build-only
 ```
 
+### Updating DarwinRelay
+
+Run updates from a normal local Terminal/iTerm session (or another independent local shell), not through the DarwinRelay MCP connection that is about to restart:
+
+```bash
+cd /path/to/darwinrelay
+./scripts/update.sh
+```
+
+That updates to the latest stable `vMAJOR.MINOR.PATCH` release. To select an exact published release instead:
+
+```bash
+./scripts/update.sh v0.6.5
+```
+
+The updater treats the Git checkout and `/Applications/DarwinRelay.app` as one transaction. It verifies the canonical GitHub origin, requires a clean checkout pinned to an exact stable release tag, checks source integrity, refuses moved tags and downgrades, atomically installs the new app with the same signing identity, refreshes autostart, restarts fail-closed, and requires the real MCP doctor to return `CORE VERDICT: READY`. If activation fails, it attempts to restore both the previous checkout and the retained rollback app.
+
+It deliberately does **not** use `git pull`, `git reset --hard`, or delete local work. A dirty/development checkout is rejected; keep development changes in another branch/worktree rather than using the production install as a coding checkout.
+
+Because the background Chrome extension is loaded unpacked from this checkout, a release that changes its manifest/source may require one manual **Reload** from Chrome's Extensions page in the dedicated **DarwinRelay** profile. The updater reports this when the extension version changes; never substitute a personal profile.
+
 ### 3. Connect ChatGPT
 
 Open the **DR** menu-bar item and press **Start**. When the MCP transport is running, choose **Copy ChatGPT Setup** and follow [docs/CHATGPT.md](docs/CHATGPT.md).

@@ -171,6 +171,14 @@ gitleaks git --config .gitleaks.toml --redact=100 .
 
 Then regenerate and verify `SHA256SUMS` for tracked regular source files, ensure the tree is clean, and tag the exact verified commit.
 
+### Installed-runtime updates
+
+- Use `./scripts/update.sh` for a release-to-release update; do not hand-roll `git pull` + app replacement.
+- The updater is intentionally manual because restarting DarwinRelay revokes in-flight execution authority. Obtain explicit operator approval before passing `--yes` or otherwise triggering the restart.
+- Prefer a normal local Terminal/iTerm or another independent local shell for a DarwinRelay self-update. The current MCP transport is expected to disappear while it restarts, so a tool call running *through* that transport is not a reliable owner for the whole transaction.
+- The updater must keep refusing dirty/development checkouts, non-canonical origins, moved release tags, signing-identity changes, and destructive Git cleanup. Never weaken those checks for convenience.
+- After reconnect, verify `bridge_status`, `./scripts/doctor.sh`, installed app/runtime versions, permissions, public transport, and background Chrome extension version. If the unpacked extension changed, reload it only in the dedicated DarwinRelay Chrome profile.
+
 ## Upstream attribution
 
 DarwinRelay is derived from the MIT-licensed Mac Developer Bridge project. Do not delete the original copyright notice from `LICENSE`, rewrite inherited authorship, or remove `UPSTREAM.md` attribution.

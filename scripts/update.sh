@@ -1,0 +1,291 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+# Manual, release-to-release updater for the source-first DarwinRelay install.
+# The menu app and Git checkout are one runtime transaction: bridge.mjs,
+# mcp-http.mjs, scripts, and the unpacked Chrome extension remain in the checkout.
+
+usage() {
+  cat <<'USAGE'
+Usage: ./scripts/update.sh [latest|vX.Y.Z] [--yes]
+
+Update a clean DarwinRelay release checkout to another published release tag.
+
+  latest   Update to the highest stable vMAJOR.MINOR.PATCH tag on origin (default).
+  vX.Y.Z   Update to this exact release tag.
+  --yes    Skip the interactive restart confirmation. Use only after explicit
+           operator approval to restart DarwinRelay.
+
+The updater refuses dirty trees, development commits, non-canonical origins,
+moved tags, and downgrades. It never uses git reset --hard or git pull.
+USAGE
+}
+
+is_canonical_origin() {
+  case "${1:-}" in
+    https://github.com/dcierra/darwinrelay|https://github.com/dcierra/darwinrelay.git|\
+    git@github.com:dcierra/darwinrelay.git|git@github.com:dcierra/darwinrelay|\
+    ssh://git@github.com/dcierra/darwinrelay|ssh://git@github.com/dcierra/darwinrelay.git)
+      return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_release_tag() {
+  [[ "${1:-}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+}
+
+semver_cmp() {
+  local a="$1" b="$2"
+  is_release_tag "$a" && is_release_tag "$b" || return 64
+  /usr/bin/awk -v a="${a#v}" -v b="${b#v}" 'BEGIN {
+    split(a,A,"."); split(b,B,".");
+    for (i=1;i<=3;i++) {
+      A[i]+=0; B[i]+=0;
+      if (A[i]<B[i]) {print -1; exit}
+      if (A[i]>B[i]) {print 1; exit}
+    }
+    print 0
+  }'
+}
+
+latest_stable_tag_from_origin() {
+  local remote="$1"
+  git ls-remote --refs --tags "$remote" 'v*' 2>/dev/null \
+    | /usr/bin/awk '{ sub("refs/tags/", "", $2); print $2 }' \
+    | /usr/bin/grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' \
+    | /usr/bin/awk -F'[v.]' '{ printf "%012d %012d %012d %s\n", $2, $3, $4, $0 }' \
+    | /usr/bin/sort \
+    | /usr/bin/tail -1 \
+    | /usr/bin/awk '{print $4}'
+}
+
+if [[ "${DARWINRELAY_UPDATE_LIBRARY_ONLY:-0}" == "1" ]]; then
+  if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    return 0
+  fi
+  exit 0
+fi
+
+# Copy the transaction driver outside the checkout before changing Git HEAD.
+if [[ "${DARWINRELAY_UPDATE_HELPER:-0}" != "1" ]]; then
+  ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+  HELPER="$(mktemp "${TMPDIR:-/tmp}/darwinrelay-update.XXXXXX")"
+  cp "$0" "$HELPER"
+  chmod 700 "$HELPER"
+  export DARWINRELAY_UPDATE_HELPER=1
+  export DARWINRELAY_UPDATE_ROOT="$ROOT"
+  exec "$HELPER" "$@"
+fi
+
+ROOT="${DARWINRELAY_UPDATE_ROOT:?missing DARWINRELAY_UPDATE_ROOT}"
+SELF="$0"
+trap 'rm -f "$SELF" 2>/dev/null || true' EXIT
+
+TARGET_REQUEST="latest"
+TARGET_SET=0
+ASSUME_YES=0
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help) usage; exit 0 ;;
+    --yes) ASSUME_YES=1 ;;
+    latest|v[0-9]*.[0-9]*.[0-9]*)
+      (( TARGET_SET == 0 )) || { echo "Only one target release may be specified." >&2; exit 64; }
+      TARGET_REQUEST="$arg"
+      TARGET_SET=1
+      ;;
+    *) echo "Unknown argument: $arg" >&2; usage >&2; exit 64 ;;
+  esac
+done
+
+for tool in git node npm codesign launchctl curl plutil ps awk sed grep; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "Required tool not found: $tool" >&2; exit 69; }
+done
+[[ "$(uname -s)" == "Darwin" ]] || { echo "DarwinRelay's installed-app updater is macOS-only." >&2; exit 69; }
+[[ -d "$ROOT/.git" || -f "$ROOT/.git" ]] || { echo "Not a Git checkout: $ROOT" >&2; exit 69; }
+
+cd "$ROOT"
+ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
+is_canonical_origin "$ORIGIN_URL" || {
+  echo "Refusing to update from non-canonical origin: ${ORIGIN_URL:-<missing>}" >&2
+  echo "Expected https://github.com/dcierra/darwinrelay (or its GitHub SSH form)." >&2
+  exit 78
+}
+[[ -z "$(git status --porcelain)" ]] || {
+  echo "Refusing to update a modified checkout. Commit/stash/revert your work first:" >&2
+  git status --short >&2
+  exit 78
+}
+
+OLD_SHA="$(git rev-parse HEAD)"
+OLD_TAG="$(git describe --tags --exact-match 2>/dev/null || true)"
+is_release_tag "$OLD_TAG" || {
+  echo "Refusing to update a development checkout. Current HEAD is not an exact stable release tag." >&2
+  echo "Keep development work in another worktree; installed runtimes should be pinned to vMAJOR.MINOR.PATCH." >&2
+  exit 78
+}
+OLD_VERSION="${OLD_TAG#v}"
+
+APP_DIR=""
+for candidate in /Applications "$HOME/Applications"; do
+  if [[ -d "$candidate/DarwinRelay.app" ]]; then APP_DIR="$candidate"; break; fi
+done
+[[ -n "$APP_DIR" ]] || { echo "Installed DarwinRelay.app not found in /Applications or ~/Applications." >&2; exit 69; }
+APP="$APP_DIR/DarwinRelay.app"
+APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2>/dev/null || true)"
+[[ "$APP_VERSION" == "$OLD_VERSION" ]] || {
+  echo "Refusing a split-version starting state: checkout=$OLD_VERSION app=${APP_VERSION:-unknown}." >&2
+  echo "Run ./scripts/doctor.sh and repair the installation before updating." >&2
+  exit 78
+}
+
+npm run check:integrity >/dev/null
+
+if [[ "$TARGET_REQUEST" == "latest" ]]; then
+  TARGET_TAG="$(latest_stable_tag_from_origin origin)"
+  [[ -n "$TARGET_TAG" ]] || { echo "No stable DarwinRelay release tags found on origin." >&2; exit 69; }
+else
+  TARGET_TAG="$TARGET_REQUEST"
+fi
+is_release_tag "$TARGET_TAG" || { echo "Invalid release tag: $TARGET_TAG" >&2; exit 64; }
+CMP="$(semver_cmp "$TARGET_TAG" "$OLD_TAG")"
+if [[ "$CMP" == "0" ]]; then
+  echo "DarwinRelay is already on $OLD_TAG."
+  exit 0
+elif [[ "$CMP" == "-1" ]]; then
+  echo "Refusing downgrade $OLD_TAG -> $TARGET_TAG. Use the retained rollback path for recovery instead." >&2
+  exit 78
+fi
+
+REMOTE_TAG_OBJECT="$(git ls-remote --refs origin "refs/tags/$TARGET_TAG" | /usr/bin/awk 'NR==1{print $1}')"
+[[ -n "$REMOTE_TAG_OBJECT" ]] || { echo "Release tag not found on canonical origin: $TARGET_TAG" >&2; exit 69; }
+if git show-ref --verify --quiet "refs/tags/$TARGET_TAG"; then
+  LOCAL_TAG_OBJECT="$(git rev-parse "refs/tags/$TARGET_TAG")"
+  [[ "$LOCAL_TAG_OBJECT" == "$REMOTE_TAG_OBJECT" ]] || {
+    echo "Refusing moved tag $TARGET_TAG (local=$LOCAL_TAG_OBJECT remote=$REMOTE_TAG_OBJECT)." >&2
+    exit 78
+  }
+else
+  git fetch --quiet origin "refs/tags/$TARGET_TAG:refs/tags/$TARGET_TAG"
+  [[ "$(git rev-parse "refs/tags/$TARGET_TAG")" == "$REMOTE_TAG_OBJECT" ]] || {
+    echo "Fetched tag object did not match origin for $TARGET_TAG." >&2
+    exit 78
+  }
+fi
+TARGET_SHA="$(git rev-list -n1 "$TARGET_TAG")"
+TARGET_VERSION="${TARGET_TAG#v}"
+TARGET_PACKAGE_VERSION="$(git show "${TARGET_SHA}:package.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).version))')"
+[[ "$TARGET_PACKAGE_VERSION" == "$TARGET_VERSION" ]] || {
+  echo "Release metadata mismatch: $TARGET_TAG points to package version $TARGET_PACKAGE_VERSION." >&2
+  exit 78
+}
+OLD_EXTENSION_VERSION="$(git show "${OLD_SHA}:chrome-extension/manifest.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).version))')"
+TARGET_EXTENSION_VERSION="$(git show "${TARGET_SHA}:chrome-extension/manifest.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).version))')"
+
+printf 'DarwinRelay update plan\n'
+printf '  source: %s (%s)\n' "$OLD_TAG" "$OLD_SHA"
+printf '  target: %s (%s)\n' "$TARGET_TAG" "$TARGET_SHA"
+printf '  app:    %s\n' "$APP"
+printf '\nThis restarts DarwinRelay and terminates active DarwinRelay shell/PTY/job authority.\n'
+if (( ASSUME_YES == 0 )); then
+  [[ -t 0 ]] || { echo "Non-interactive update requires --yes after explicit operator approval." >&2; exit 64; }
+  read -r -p "Continue with $OLD_TAG -> $TARGET_TAG? [y/N] " answer
+  case "$answer" in y|Y|yes|YES) ;; *) echo "Update cancelled."; exit 0 ;; esac
+fi
+
+DOMAIN="gui/$(id -u)"
+SERVICE_LABEL="io.github.dcierra.darwinrelay.http"
+SERVICE_PLIST="$HOME/Library/LaunchAgents/$SERVICE_LABEL.plist"
+OLD_MENU_PID="$(ps -axo pid=,command= | awk '$2 ~ /\/DarwinRelay\.app\/Contents\/MacOS\/DarwinRelay$/ {if(!p)p=$1} END{print p}')"
+APP_SWAPPED=0
+ROLLING_BACK=0
+
+wait_health() {
+  local attempts=100
+  while (( attempts > 0 )); do
+    curl -fsS --max-time 1 http://127.0.0.1:8787/healthz >/dev/null 2>&1 && return 0
+    sleep 0.2
+    attempts=$((attempts - 1))
+  done
+  return 1
+}
+
+rollback_update() {
+  local original_rc="${1:-1}"
+  (( ROLLING_BACK == 0 )) || exit "$original_rc"
+  ROLLING_BACK=1
+  trap - ERR INT TERM
+  set +e
+  echo
+  echo "Update failed; rolling back to $OLD_TAG..." >&2
+
+  launchctl bootout "$DOMAIN/$SERVICE_LABEL" >/dev/null 2>&1 || true
+  for pid in $(ps -axo pid=,command= | awk '$2 ~ /\/DarwinRelay\.app\/Contents\/MacOS\/DarwinRelay$/ {print $1}'); do
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  sleep 1
+
+  if (( APP_SWAPPED == 1 )) && [[ -d "$APP_DIR/.DarwinRelay.app.rollback" ]]; then
+    DARWINRELAY_APP_INSTALL_DIR="$APP_DIR" "$ROOT/scripts/rollback-menubar-update.sh" || true
+  fi
+
+  git checkout --detach "$OLD_SHA" >/dev/null 2>&1 || true
+  if [[ -x "$ROOT/scripts/install-http-autostart.sh" && -x "$APP/Contents/MacOS/DarwinRelay" ]]; then
+    DARWINRELAY_APP_PATH="$APP" DARWINRELAY_HTTP_AUTOSTART_LOAD_NOW=0 "$ROOT/scripts/install-http-autostart.sh" >/dev/null 2>&1 || true
+    launchctl bootout "$DOMAIN/$SERVICE_LABEL" >/dev/null 2>&1 || true
+    launchctl bootstrap "$DOMAIN" "$SERVICE_PLIST" >/dev/null 2>&1 || true
+    wait_health || true
+  fi
+  echo "Rollback attempt complete. Run ./scripts/doctor.sh before retrying the update." >&2
+  exit "$original_rc"
+}
+trap 'rollback_update $?' ERR
+trap 'rollback_update 130' INT TERM
+
+# Stop before replacing source files. This is deliberately fail-closed: no MCP
+# mutation authority remains live while the checkout is between release states.
+./scripts/disable.sh
+if [[ -n "$OLD_MENU_PID" ]] && kill -0 "$OLD_MENU_PID" 2>/dev/null; then
+  kill -TERM "$OLD_MENU_PID" 2>/dev/null || true
+  attempts=50
+  while kill -0 "$OLD_MENU_PID" 2>/dev/null && (( attempts > 0 )); do
+    sleep 0.1
+    attempts=$((attempts - 1))
+  done
+  kill -0 "$OLD_MENU_PID" 2>/dev/null && kill -KILL "$OLD_MENU_PID" 2>/dev/null || true
+fi
+
+# Only after authority is stopped do source and installed app move to the target.
+git checkout --detach "$TARGET_SHA"
+npm run check:integrity >/dev/null
+DARWINRELAY_APP_INSTALL_DIR="$APP_DIR" ./scripts/deploy-menubar-update.sh
+APP_SWAPPED=1
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" == "$TARGET_VERSION" ]]
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_DIR/.DarwinRelay.app.rollback/Contents/Info.plist")" == "$OLD_VERSION" ]]
+
+DARWINRELAY_APP_PATH="$APP" DARWINRELAY_HTTP_AUTOSTART_LOAD_NOW=0 ./scripts/install-http-autostart.sh >/dev/null
+plutil -lint "$SERVICE_PLIST" >/dev/null
+if grep -Fq '<key>WorkingDirectory</key>' "$SERVICE_PLIST"; then
+  echo "Refusing generated autostart plist with source-checkout WorkingDirectory." >&2
+  false
+fi
+
+launchctl bootout "$DOMAIN/$SERVICE_LABEL" >/dev/null 2>&1 || true
+launchctl bootstrap "$DOMAIN" "$SERVICE_PLIST"
+launchctl enable "$DOMAIN/$SERVICE_LABEL"
+wait_health
+
+DOCTOR_OUT="$(./scripts/doctor.sh --transport http)"
+printf '%s\n' "$DOCTOR_OUT"
+[[ "$DOCTOR_OUT" == *"CORE VERDICT: READY"* ]]
+[[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+[[ "$(git describe --tags --exact-match)" == "$TARGET_TAG" ]]
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" == "$TARGET_VERSION" ]]
+
+trap - ERR INT TERM
+printf '\nDarwinRelay update complete: %s -> %s\n' "$OLD_TAG" "$TARGET_TAG"
+printf 'Checkout and app are aligned at %s; rollback app retained at %s/.DarwinRelay.app.rollback\n' "$TARGET_VERSION" "$APP_DIR"
+if [[ "$OLD_EXTENSION_VERSION" != "$TARGET_EXTENSION_VERSION" ]]; then
+  printf '\nBackground Chrome extension files changed (%s -> %s).\n' "$OLD_EXTENSION_VERSION" "$TARGET_EXTENSION_VERSION"
+  printf 'Reload "DarwinRelay Background Browser" from the Extensions page in the dedicated DarwinRelay Chrome profile, then rerun ./scripts/doctor.sh.\n'
+fi

@@ -359,9 +359,14 @@ esac
 
 CHROME_BINDING="$DATA_DIR/chrome-background-profile.json"
 CHROME_READY="$(json_field backgroundChrome.extensionReady || true)"
+CHROME_EXTENSION_VERSION="$(json_field backgroundChrome.extension.version || true)"
 if [[ "$CHROME_READY" == true ]]; then
   CHROME_PROFILE="$(json_field backgroundChrome.profileBinding.profileName || true)"
-  optional_ready "Background Chrome" "${CHROME_PROFILE:-DarwinRelay profile} connected"
+  if [[ -n "$RUNTIME_VERSION" && -n "$CHROME_EXTENSION_VERSION" && "$RUNTIME_VERSION" != "$CHROME_EXTENSION_VERSION" ]]; then
+    optional_action "Background Chrome" "extension v$CHROME_EXTENSION_VERSION is connected but runtime is v$RUNTIME_VERSION; reload DarwinRelay Background Browser in the dedicated ${CHROME_PROFILE:-DarwinRelay} profile"
+  else
+    optional_ready "Background Chrome" "${CHROME_PROFILE:-DarwinRelay profile} connected${CHROME_EXTENSION_VERSION:+ (v$CHROME_EXTENSION_VERSION)}"
+  fi
 elif [[ -f "$CHROME_BINDING" ]]; then
   optional_action "Background Chrome" "binding exists but extension is not confirmed ready; run scripts/install-background-chrome.sh and load the extension in the dedicated profile"
 else
