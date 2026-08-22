@@ -37,6 +37,12 @@ try {
   assert.equal(status.fullAccessUnlocked, true);
   assert.equal(status.federation.configured, 0, "stdio doctor probe inherited federation config");
   assert.equal(status.auditMode, "off", "stdio doctor probe should not add audit noise");
+
+  await assert.rejects(
+    execFileAsync(process.execPath, [path.join(ROOT, "scripts", "probe-bridge-status.mjs"), "--stdio", path.join(ROOT, "bridge.mjs"), "--tool", "shell_exec"], { timeout: 15_000 }),
+    (error) => error?.code === 64 && String(error.stderr || "").includes("--tool must be bridge_status or ui_status"),
+    "runtime probe must reject mutation-capable tools",
+  );
   console.log("bridge status stdio probe test passed");
 } finally {
   await fs.rm(tempRoot, { recursive: true, force: true });

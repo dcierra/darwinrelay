@@ -11,8 +11,8 @@ const CLIENT_INFO = { name: "darwinrelay-doctor", version: "1" };
 function usage(message = null) {
   if (message) console.error(`probe-bridge-status: ${message}`);
   console.error("Usage:");
-  console.error("  node scripts/probe-bridge-status.mjs --http-port PORT --token-file PATH");
-  console.error("  node scripts/probe-bridge-status.mjs --stdio PATH_TO_BRIDGE");
+  console.error("  node scripts/probe-bridge-status.mjs --http-port PORT --token-file PATH [--tool bridge_status|ui_status]");
+  console.error("  node scripts/probe-bridge-status.mjs --stdio PATH_TO_BRIDGE [--tool bridge_status|ui_status]");
   process.exit(64);
 }
 
@@ -23,23 +23,26 @@ function parseArgs(argv) {
     if (arg === "--http-port") out.httpPort = argv[++i];
     else if (arg === "--token-file") out.tokenFile = argv[++i];
     else if (arg === "--stdio") out.stdio = argv[++i];
+    else if (arg === "--tool") out.tool = argv[++i];
     else usage(`unknown argument ${arg}`);
   }
+  const tool = out.tool || "bridge_status";
+  if (!new Set(["bridge_status", "ui_status"]).has(tool)) usage("--tool must be bridge_status or ui_status");
   if (out.stdio && (out.httpPort || out.tokenFile)) usage("choose either --stdio or --http-port/--token-file");
-  if (out.stdio) return { mode: "stdio", bridge: out.stdio };
+  if (out.stdio) return { mode: "stdio", bridge: out.stdio, tool };
   if (!out.httpPort || !out.tokenFile) usage("HTTP mode requires --http-port and --token-file");
   const port = Number(out.httpPort);
   if (!Number.isInteger(port) || port < 1 || port > 65535) usage("HTTP port must be 1-65535");
-  return { mode: "http", port, tokenFile: out.tokenFile };
+  return { mode: "http", port, tokenFile: out.tokenFile, tool };
 }
 
-function statusFromToolReply(reply) {
-  if (!reply || typeof reply !== "object") throw new Error("empty bridge_status reply");
+function statusFromToolReply(reply, tool) {
+  if (!reply || typeof reply !== "object") throw new Error(`empty ${tool} reply`);
   if (reply.error) throw new Error(`JSON-RPC ${reply.error.code ?? "error"}: ${reply.error.message || "bridge error"}`);
   const result = reply.result;
   if (!result || result.isError) {
     const text = result?.content?.find?.((item) => item?.type === "text")?.text;
-    throw new Error(text || "bridge_status returned an MCP error");
+    throw new Error(text || `${tool} returned an MCP error`);
   }
   if (result.structuredContent && typeof result.structuredContent === "object") return result.structuredContent;
   const text = result.content?.find?.((item) => item?.type === "text")?.text;
@@ -47,10 +50,10 @@ function statusFromToolReply(reply) {
     const parsed = JSON.parse(text);
     if (parsed && typeof parsed === "object") return parsed;
   }
-  throw new Error("bridge_status reply had no structured status object");
+  throw new Error(`${tool} reply had no structured status object`);
 }
 
-async function probeHttp({ port, tokenFile }) {
+async function probeHttp({ port, tokenFile, tool }) {
   const raw = await fs.readFile(tokenFile, "utf8");
   const token = raw.trim();
   if (!token) throw new Error("token file is empty");
@@ -93,8 +96,8 @@ async function probeHttp({ port, tokenFile }) {
     jsonrpc: "2.0",
     id: "doctor-status",
     method: "tools/call",
-    params: { name: "bridge_status", arguments: {} },
-  }));
+    params: { name: tool, arguments: {} },
+  }), tool);
 }
 
 function stdioProbeEnv() {
@@ -116,7 +119,7 @@ function stdioProbeEnv() {
   return env;
 }
 
-async function probeStdio({ bridge }) {
+async function probeStdio({ bridge, tool }) {
   const bridgePath = path.resolve(bridge);
   await fs.access(bridgePath);
   const child = spawn(process.execPath, [bridgePath], {
@@ -166,7 +169,7 @@ async function probeStdio({ bridge }) {
     });
     if (!init?.result?.serverInfo?.name) throw new Error("MCP initialize did not return serverInfo");
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
-    return statusFromToolReply(await request("doctor-status", "tools/call", { name: "bridge_status", arguments: {} }));
+    return statusFromToolReply(await request("doctor-status", "tools/call", { name: tool, arguments: {} }), tool);
   } finally {
     rl.close();
     try { child.stdin.end(); } catch {}

@@ -127,10 +127,20 @@ wait_launchagent_running() { # domain, label
   return 1
 }
 
-wait_native_desktop_ready() { # doctor-bin, attempts, interval-seconds
-  local doctor_bin="$1" attempts="${2:-100}" interval="${3:-0.2}"
+ui_status_json_ready() { # JSON string
+  node -e '''const s=JSON.parse(process.argv[1]); process.exit(s.accessibilityTrusted===true && s.screenRecordingGranted===true && s.postEventsGranted===true ? 0 : 1)''' "$1"
+}
+
+runtime_ui_status_ready() { # probe-script, token-file, port
+  local probe="$1" token_file="$2" port="$3" raw
+  raw="$(node "$probe" --http-port "$port" --token-file "$token_file" --tool ui_status 2>/dev/null)" || return 2
+  ui_status_json_ready "$raw"
+}
+
+wait_runtime_ui_status_ready() { # probe-script, token-file, port, attempts, interval-seconds
+  local probe="$1" token_file="$2" port="$3" attempts="${4:-100}" interval="${5:-0.2}"
   while (( attempts > 0 )); do
-    if "$doctor_bin" >/dev/null 2>&1; then
+    if runtime_ui_status_ready "$probe" "$token_file" "$port"; then
       return 0
     fi
     sleep "$interval"
@@ -160,9 +170,11 @@ fi
 ROOT="${DARWINRELAY_UPDATE_ROOT:?missing DARWINRELAY_UPDATE_ROOT}"
 SELF="$0"
 TARGET_DISABLE_SCRIPT=""
+TARGET_PROBE_SCRIPT=""
 cleanup_update_helper() {
   rm -f "$SELF" 2>/dev/null || true
   [[ -z "$TARGET_DISABLE_SCRIPT" ]] || rm -f "$TARGET_DISABLE_SCRIPT" 2>/dev/null || true
+  [[ -z "$TARGET_PROBE_SCRIPT" ]] || rm -f "$TARGET_PROBE_SCRIPT" 2>/dev/null || true
 }
 trap cleanup_update_helper EXIT
 
@@ -180,6 +192,16 @@ if [[ -n "$CANDIDATE_SHA" ]]; then
   CANDIDATE_MODE=1
 fi
 CANDIDATE_FAILPOINT="${DARWINRELAY_UPDATE_CANDIDATE_FAILPOINT:-}"
+CANDIDATE_MARKER_FILE="${DARWINRELAY_UPDATE_CANDIDATE_MARKER_FILE:-}"
+CANDIDATE_EXPECT_DESKTOP_READY="${DARWINRELAY_UPDATE_EXPECT_DESKTOP_READY:-0}"
+if [[ -n "$CANDIDATE_MARKER_FILE" && "$CANDIDATE_MODE" != 1 ]]; then
+  echo "Candidate marker files are unavailable outside maintainer candidate mode." >&2
+  exit 64
+fi
+if [[ "$CANDIDATE_EXPECT_DESKTOP_READY" != 0 && "$CANDIDATE_EXPECT_DESKTOP_READY" != 1 ]]; then
+  echo "DARWINRELAY_UPDATE_EXPECT_DESKTOP_READY must be 0 or 1." >&2
+  exit 64
+fi
 if [[ -n "$CANDIDATE_FAILPOINT" ]]; then
   (( CANDIDATE_MODE == 1 )) || { echo "Candidate failpoints are unavailable outside maintainer candidate mode." >&2; exit 64; }
   case "$CANDIDATE_FAILPOINT" in
@@ -242,14 +264,6 @@ APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$
 }
 
 npm run check:integrity >/dev/null
-
-# Preserve already-configured native desktop capability as an update postcondition.
-# macOS can briefly report stale TCC state immediately after an atomic bundle
-# replacement even when the helper's designated requirement is unchanged.
-OLD_DESKTOP_READY=0
-if "$ROOT/scripts/desktop-doctor.sh" >/dev/null 2>&1; then
-  OLD_DESKTOP_READY=1
-fi
 
 if (( CANDIDATE_MODE == 1 )); then
   (( TARGET_SET == 0 )) || { echo "Do not combine maintainer candidate mode with a release tag argument." >&2; exit 64; }
@@ -329,6 +343,45 @@ TARGET_DISABLE_ACTUAL="$(shasum -a 256 "$TARGET_DISABLE_SCRIPT" | awk '{print $1
 }
 chmod 700 "$TARGET_DISABLE_SCRIPT"
 
+# Use the target's authenticated MCP probe for capability snapshots. The updater
+# is normally launched from Terminal/iTerm, whose TCC context is not the same as
+# the running DarwinRelay.app. Measuring ui_status through the live local MCP
+# runtime exercises the real responsible-process chain instead.
+TARGET_PROBE_SCRIPT="$(mktemp "${TMPDIR:-/tmp}/darwinrelay-probe-target.XXXXXX")"
+git show "${TARGET_SHA}:scripts/probe-bridge-status.mjs" > "$TARGET_PROBE_SCRIPT"
+TARGET_PROBE_EXPECTED="$(git show "${TARGET_SHA}:SHA256SUMS" | awk '$2 == "scripts/probe-bridge-status.mjs" {print $1; exit}')"
+TARGET_PROBE_ACTUAL="$(shasum -a 256 "$TARGET_PROBE_SCRIPT" | awk '{print $1}')"
+[[ -n "$TARGET_PROBE_EXPECTED" && "$TARGET_PROBE_ACTUAL" == "$TARGET_PROBE_EXPECTED" ]] || {
+  echo "Target runtime-status probe failed integrity verification." >&2
+  exit 78
+}
+chmod 700 "$TARGET_PROBE_SCRIPT"
+
+HTTP_PORT="${DARWINRELAY_HTTP_PORT:-8787}"
+HTTP_TOKEN_FILE="${DARWINRELAY_HTTP_TOKEN_FILE:-$HOME/Library/Application Support/DarwinRelay/http-token}"
+OLD_DESKTOP_READY=0
+set +e
+runtime_ui_status_ready "$TARGET_PROBE_SCRIPT" "$HTTP_TOKEN_FILE" "$HTTP_PORT"
+OLD_DESKTOP_RC=$?
+set -e
+case "$OLD_DESKTOP_RC" in
+  0) OLD_DESKTOP_READY=1; echo "Native desktop baseline: READY via live MCP runtime." ;;
+  1) echo "Native desktop baseline: not fully granted via live MCP runtime." ;;
+  *) echo "Native desktop baseline: unavailable; preservation postcondition will not be asserted." ;;
+esac
+if (( CANDIDATE_MODE == 1 )) && [[ "$CANDIDATE_EXPECT_DESKTOP_READY" == 1 && "$OLD_DESKTOP_READY" != 1 ]]; then
+  echo "Candidate harness observed native desktop READY before the transaction, but updater could not reproduce that live MCP baseline." >&2
+  exit 78
+fi
+
+record_candidate_failpoint() { # failpoint name
+  local point="$1"
+  if [[ -n "$CANDIDATE_MARKER_FILE" ]]; then
+    umask 077
+    printf '%s %s\n' "$point" "$TARGET_SHA" > "$CANDIDATE_MARKER_FILE"
+  fi
+}
+
 DOMAIN="gui/$(id -u)"
 SERVICE_LABEL="io.github.dcierra.darwinrelay.http"
 SERVICE_PLIST="$HOME/Library/LaunchAgents/$SERVICE_LABEL.plist"
@@ -338,7 +391,7 @@ ROLLING_BACK=0
 wait_health() {
   local attempts=100
   while (( attempts > 0 )); do
-    curl -fsS --max-time 1 http://127.0.0.1:8787/healthz >/dev/null 2>&1 && return 0
+    curl -fsS --max-time 1 "http://127.0.0.1:${HTTP_PORT}/healthz" >/dev/null 2>&1 && return 0
     sleep 0.2
     attempts=$((attempts - 1))
   done
@@ -414,6 +467,7 @@ DARWINRELAY_DEPLOY_VERIFY_RUNTIME_PIDS=0 DARWINRELAY_APP_INSTALL_DIR="$APP_DIR" 
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" == "$TARGET_VERSION" ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_DIR/.DarwinRelay.app.rollback/Contents/Info.plist")" == "$OLD_VERSION" ]]
 if (( CANDIDATE_MODE == 1 )) && [[ "$CANDIDATE_FAILPOINT" == "after_app_install" ]]; then
+  record_candidate_failpoint after_app_install
   echo "Maintainer candidate failpoint: after_app_install" >&2
   false
 fi
@@ -440,11 +494,11 @@ LAUNCHAGENT_PID="$(wait_launchagent_running "$DOMAIN" "$SERVICE_LABEL")"
 wait_health
 
 if (( OLD_DESKTOP_READY == 1 )); then
-  if ! wait_native_desktop_ready "./scripts/desktop-doctor.sh" 100 0.2; then
-    echo "Native desktop was READY before update but did not recover after the app replacement; rolling back." >&2
+  if ! wait_runtime_ui_status_ready "$TARGET_PROBE_SCRIPT" "$HTTP_TOKEN_FILE" "$HTTP_PORT" 100 0.2; then
+    echo "Native desktop was READY before update but the live MCP runtime did not recover Accessibility/Screen/Input after the app replacement; rolling back." >&2
     false
   fi
-  echo "Native desktop permissions preserved after update."
+  echo "Native desktop permissions preserved after update via live MCP runtime."
 fi
 
 DOCTOR_OUT="$(./scripts/doctor.sh --transport http)"
@@ -458,6 +512,7 @@ else
 fi
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" == "$TARGET_VERSION" ]]
 if (( CANDIDATE_MODE == 1 )) && [[ "$CANDIDATE_FAILPOINT" == "after_validation" ]]; then
+  record_candidate_failpoint after_validation
   echo "Maintainer candidate failpoint: after_validation" >&2
   false
 fi

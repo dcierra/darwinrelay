@@ -85,31 +85,33 @@ chmod +x "$TMP/launchctl"
 LAUNCHCTL_BIN="$TMP/launchctl"
 [[ "$(launchagent_running_pid gui/501 io.github.dcierra.darwinrelay.http)" == "101" ]]
 
-# Previously-ready native desktop is a postcondition, with bounded retry for the
-# short TCC cache window after an atomic app replacement.
-cat > "$TMP/desktop-doctor-retry" <<'SH'
-#!/bin/bash
-COUNT_FILE="${DR_TEST_COUNT_FILE:?}"
-n=0
-[[ ! -f "$COUNT_FILE" ]] || n="$(cat "$COUNT_FILE")"
-n=$((n + 1))
-printf '%s\n' "$n" > "$COUNT_FILE"
-(( n >= 3 ))
-SH
-chmod +x "$TMP/desktop-doctor-retry"
-DR_TEST_COUNT_FILE="$TMP/desktop-count" wait_native_desktop_ready "$TMP/desktop-doctor-retry" 5 0.01
-[[ "$(cat "$TMP/desktop-count")" == 3 ]]
-cat > "$TMP/desktop-doctor-never" <<'SH'
-#!/bin/bash
-exit 2
-SH
-chmod +x "$TMP/desktop-doctor-never"
-if wait_native_desktop_ready "$TMP/desktop-doctor-never" 2 0.01; then
-  echo "native desktop readiness wait accepted permanent failure" >&2
+# Native desktop readiness is measured through the authenticated live MCP probe,
+# never by launching MacUIHelper directly from the updater's Terminal/iTerm TCC context.
+ui_status_json_ready '{"accessibilityTrusted":true,"screenRecordingGranted":true,"postEventsGranted":true}'
+if ui_status_json_ready '{"accessibilityTrusted":true,"screenRecordingGranted":false,"postEventsGranted":true}'; then
+  echo "ui_status readiness accepted a missing permission" >&2
   exit 1
 fi
-grep -Fq 'Native desktop was READY before update but did not recover' "$ROOT/scripts/update.sh"
-grep -Fq 'Native desktop permissions preserved after update.' "$ROOT/scripts/update.sh"
+cat > "$TMP/ui-probe.mjs" <<'JS'
+const f = process.env.DR_TEST_COUNT_FILE;
+const fs = await import('node:fs');
+let n = 0;
+try { n = Number(fs.readFileSync(f, 'utf8')) || 0; } catch {}
+n += 1;
+fs.writeFileSync(f, String(n));
+const ready = n >= 3;
+process.stdout.write(JSON.stringify({accessibilityTrusted:ready,screenRecordingGranted:ready,postEventsGranted:ready})+'\n');
+JS
+: > "$TMP/token"
+DR_TEST_COUNT_FILE="$TMP/ui-count" wait_runtime_ui_status_ready "$TMP/ui-probe.mjs" "$TMP/token" 8787 5 0.01
+[[ "$(cat "$TMP/ui-count")" == 3 ]]
+grep -Fq 'Native desktop baseline: READY via live MCP runtime.' "$ROOT/scripts/update.sh"
+grep -Fq 'Native desktop permissions preserved after update via live MCP runtime.' "$ROOT/scripts/update.sh"
+grep -Fq -- '--tool ui_status' "$ROOT/scripts/update.sh"
+grep -Fq 'record_candidate_failpoint after_validation' "$ROOT/scripts/update.sh"
+grep -Fq 'DARWINRELAY_UPDATE_CANDIDATE_MARKER_FILE' "$ROOT/scripts/update.sh"
+grep -Fq 'Candidate updater failed before the expected' "$ROOT/scripts/test-update-candidate.sh"
+grep -Fq 'EXPECTED_MARKER="$EXPECTED_POINT $CANDIDATE_SHA"' "$ROOT/scripts/test-update-candidate.sh"
 
 grep -Fq 'Re-establish a contained baseline immediately' "$ROOT/scripts/update.sh"
 grep -Fq 'LAUNCHAGENT_PID="$(wait_launchagent_running "$DOMAIN" "$SERVICE_LABEL")"' "$ROOT/scripts/update.sh"

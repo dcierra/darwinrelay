@@ -108,14 +108,37 @@ CANDIDATE_VERSION="$(node -p 'require(process.argv[1]).version' "$CANDIDATE_ROOT
 [[ "$CANDIDATE_SHA" != "$OLD_SHA" ]] || { echo "Candidate commit equals installed release commit." >&2; exit 78; }
 
 npm --prefix "$CANDIDATE_ROOT" run check:integrity >/dev/null
+
+# Snapshot native desktop readiness through the current live MCP runtime. This
+# uses the candidate probe client but executes ui_status inside the installed
+# DarwinRelay chain, avoiding Terminal/iTerm TCC attribution.
+HTTP_PORT="${DARWINRELAY_HTTP_PORT:-8787}"
+HTTP_TOKEN_FILE="${DARWINRELAY_HTTP_TOKEN_FILE:-$HOME/Library/Application Support/DarwinRelay/http-token}"
+PRE_UI_JSON="$(node "$CANDIDATE_ROOT/scripts/probe-bridge-status.mjs" --http-port "$HTTP_PORT" --token-file "$HTTP_TOKEN_FILE" --tool ui_status)" || {
+  echo "Candidate preflight could not query ui_status through the live MCP runtime." >&2
+  exit 78
+}
+PRE_DESKTOP_READY=0
+if node -e 'const s=JSON.parse(process.argv[1]); process.exit(s.accessibilityTrusted===true && s.screenRecordingGranted===true && s.postEventsGranted===true ? 0 : 1)' "$PRE_UI_JSON"; then
+  PRE_DESKTOP_READY=1
+fi
+
 HELPER="$(mktemp "${TMPDIR:-/tmp}/darwinrelay-candidate-update.XXXXXX")"
+MARKER_FILE="$(mktemp "${TMPDIR:-/tmp}/darwinrelay-candidate-marker.XXXXXX")"
+: > "$MARKER_FILE"
 cp "$CANDIDATE_ROOT/scripts/update.sh" "$HELPER"
 chmod 700 "$HELPER"
+cleanup_candidate_test() {
+  rm -f "$HELPER" "$MARKER_FILE" 2>/dev/null || true
+}
+trap cleanup_candidate_test EXIT
 
 export DARWINRELAY_UPDATE_HELPER=1
 export DARWINRELAY_UPDATE_ROOT="$PROD_ROOT"
 export DARWINRELAY_MAINTAINER_CANDIDATE_TEST="$ACK"
 export DARWINRELAY_UPDATE_CANDIDATE_SHA="$CANDIDATE_SHA"
+export DARWINRELAY_UPDATE_CANDIDATE_MARKER_FILE="$MARKER_FILE"
+export DARWINRELAY_UPDATE_EXPECT_DESKTOP_READY="$PRE_DESKTOP_READY"
 case "$MODE" in
   rollback) export DARWINRELAY_UPDATE_CANDIDATE_FAILPOINT=after_app_install ;;
   roundtrip) export DARWINRELAY_UPDATE_CANDIDATE_FAILPOINT=after_validation ;;
@@ -125,7 +148,6 @@ set +e
 "$HELPER" "${ARGS[@]}"
 rc=$?
 set -e
-rm -f "$HELPER" 2>/dev/null || true
 
 app_version() {
   /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2>/dev/null || true
@@ -137,6 +159,14 @@ launchagent_running() {
 
 if [[ "$MODE" == "rollback" || "$MODE" == "roundtrip" ]]; then
   [[ "$rc" -ne 0 ]] || { echo "Candidate test expected the injected validation failure." >&2; exit 1; }
+  EXPECTED_POINT="after_validation"
+  [[ "$MODE" == "rollback" ]] && EXPECTED_POINT="after_app_install"
+  EXPECTED_MARKER="$EXPECTED_POINT $CANDIDATE_SHA"
+  ACTUAL_MARKER="$(cat "$MARKER_FILE" 2>/dev/null || true)"
+  [[ "$ACTUAL_MARKER" == "$EXPECTED_MARKER" ]] || {
+    echo "Candidate updater failed before the expected $EXPECTED_POINT failpoint (marker=${ACTUAL_MARKER:-<missing>})." >&2
+    exit 1
+  }
   [[ "$(git -C "$PROD_ROOT" rev-parse HEAD)" == "$OLD_SHA" ]] || { echo "Rollback did not restore old checkout." >&2; exit 1; }
   [[ "$(app_version)" == "$OLD_VERSION" ]] || { echo "Rollback did not restore app v$OLD_VERSION." >&2; exit 1; }
   launchagent_running || { echo "Rollback did not restore LaunchAgent ownership." >&2; exit 1; }

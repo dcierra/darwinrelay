@@ -4,9 +4,9 @@ All notable public DarwinRelay changes will be documented here.
 
 ## Unreleased
 
-- Manual updates now preserve an already-ready native desktop capability as a checked postcondition: after replacing the app, DarwinRelay waits for the signed helper TCC state to recover within a bounded grace window and rolls back instead of silently leaving Accessibility/Screen/Input unavailable.
+- Manual updates now preserve an already-ready native desktop capability as a checked postcondition: readiness is measured through the authenticated live MCP runtime (not the updater terminal's unrelated TCC context), and DarwinRelay rolls back if Accessibility/Screen/Input do not recover after the app replacement.
 - Hardened manual-update containment against asynchronous `launchctl bootout`: product LaunchAgents are disabled before bootout and DarwinRelay waits until launchd proves the service is absent before killing child processes, preventing KeepAlive relaunch races observed during real v0.6.6 → v0.6.8 validation.
-- Added a maintainer-only pre-release updater harness that can exercise an exact clean candidate commit on a real Mac before any public tag exists, including an injected post-install rollback check and a full validated round-trip back to the prior stable release. The normal user updater remains canonical-release-only.
+- Added a maintainer-only pre-release updater harness that can exercise an exact clean candidate commit on a real Mac before any public tag exists, including an injected post-install rollback check and a full validated round-trip back to the prior stable release. The normal user updater remains canonical-release-only. The harness now requires an exact failpoint marker tied to the candidate SHA, so an unrelated early failure followed by successful rollback cannot be misreported as a validated round-trip.
 ## 0.6.8 — 2026-08-22
 
 - Fixed the manual update transaction discovered during the real v0.6.6 → v0.6.7 validation: deploy process discovery now snapshots `ps` before running its matcher so the matcher cannot identify its own argv as `mcp-http.mjs`; the updater invokes app deployment in an explicit stopped-runtime mode rather than applying zero-downtime PID invariants; and rollback restores/rebuilds the old app based on actual bundle versions instead of a post-success flag.
