@@ -4,6 +4,8 @@ All notable public DarwinRelay changes will be documented here.
 
 ## Unreleased
 
+## 0.6.5 — 2026-08-22
+
 - Doctor now reports a connected unpacked background-Chrome extension as `OPTIONAL / ACTION REQUIRED` when its version differs from the runtime package, instead of presenting a stale service worker as fully READY after an update.
 - Added a canonical manual `scripts/update.sh` transaction for source-first installations: it updates only between immutable stable release tags from the canonical repository, refuses dirty/development or split-version installs, preserves rollback, restarts fail-closed through the HTTP LaunchAgent, and requires the authenticated doctor to return `CORE VERDICT: READY`. README and agent operations now document this as the supported release-to-release update path.
 ## 0.6.4 — 2026-08-22
