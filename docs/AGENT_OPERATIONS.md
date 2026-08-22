@@ -186,7 +186,9 @@ Do not attempt to bypass Strict mode through shell, environment tricks, another 
 
 ## Updating an installed runtime
 
-For a source-first installation, use the repository's manual updater from an independent local shell:
+The canonical updater exists from v0.6.5 onward. An installation pinned to v0.6.4 or older needs one final manual source-first upgrade/reinstall to v0.6.5 before this workflow is available.
+
+For a source-first installation on v0.6.5 or newer, use the repository's manual updater from an independent local shell:
 
 ```bash
 cd /path/to/darwinrelay
