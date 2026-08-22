@@ -4,6 +4,7 @@ All notable public DarwinRelay changes will be documented here.
 
 ## Unreleased
 
+- Fixed process ownership for manual updates and the kill switch: DarwinRelay now reclaims/verifies only the `cloudflared` process recorded in its own pidfile instead of treating unrelated tunnels on the Mac as survivors, deploy PID checks use the same ownership boundary, and the updater verifies/uses the target release's `disable.sh` before changing HEAD so a newer release can repair containment logic in an older installation.
 ## 0.6.5 — 2026-08-22
 
 - Doctor now reports a connected unpacked background-Chrome extension as `OPTIONAL / ACTION REQUIRED` when its version differs from the runtime package, instead of presenting a stale service worker as fully READY after an update.
