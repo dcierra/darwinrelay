@@ -53,4 +53,52 @@ grep -Fq 'TARGET_DISABLE_EXPECTED=' "$ROOT/scripts/update.sh"
 pattern='DARWINRELAY_INSTALL_DIR="$ROOT" "$TARGET_DISABLE_SCRIPT"'
 grep -Fq "$pattern" "$ROOT/scripts/update.sh"
 
+# LaunchAgent ownership is part of update success, not merely localhost health.
+cat > "$TMP/ps" <<'SH'
+#!/bin/bash
+if [[ "$1" == "-axo" ]]; then
+  printf '%s\n' \
+    '101 /Applications/DarwinRelay.app/Contents/MacOS/DarwinRelay --start' \
+    '102 /opt/homebrew/bin/node /tmp/other.mjs'
+  exit 0
+fi
+exit 1
+SH
+chmod +x "$TMP/ps"
+PS_BIN="$TMP/ps"
+[[ "$(darwinrelay_menu_pids)" == "101" ]]
+
+cat > "$TMP/launchctl" <<'SH'
+#!/bin/bash
+if [[ "$1" == "print" ]]; then
+  cat <<'OUT'
+gui/501/io.github.dcierra.darwinrelay.http = {
+    state = running
+    pid = 101
+}
+OUT
+  exit 0
+fi
+exit 1
+SH
+chmod +x "$TMP/launchctl"
+LAUNCHCTL_BIN="$TMP/launchctl"
+[[ "$(launchagent_running_pid gui/501 io.github.dcierra.darwinrelay.http)" == "101" ]]
+
+grep -Fq 'Re-establish a contained baseline immediately' "$ROOT/scripts/update.sh"
+grep -Fq 'LAUNCHAGENT_PID="$(wait_launchagent_running "$DOMAIN" "$SERVICE_LABEL")"' "$ROOT/scripts/update.sh"
+grep -Fq 'HTTP LaunchAgent owns the live menu runtime' "$ROOT/scripts/update.sh"
+
+python3 - "$ROOT/scripts/update.sh" <<'PY2'
+from pathlib import Path
+import sys
+s=Path(sys.argv[1]).read_text()
+anchor=s.index('Re-establish a contained baseline immediately')
+second_disable=s.index('DARWINRELAY_INSTALL_DIR="$ROOT" "$TARGET_DISABLE_SCRIPT"', anchor)
+stop=s.index('stop_all_menu_instances', second_disable)
+bootstrap=s.index('launchctl bootstrap "$DOMAIN" "$SERVICE_PLIST"', stop)
+owned=s.index('LAUNCHAGENT_PID="$(wait_launchagent_running', bootstrap)
+assert second_disable < stop < bootstrap < owned
+PY2
+
 echo "manual updater test passed"
