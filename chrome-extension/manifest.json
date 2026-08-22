@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DarwinRelay Background Browser",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "description": "Background Chrome control for DarwinRelay without routine focus theft.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0dzLyMy4YLiYEb6E98jOZXRs6jtFGRO2xp/8nZ5yDdOSRuagwy95LpljT4eCPiBi9UNQnsu24O5JoLe76sRyixF5pzbOLJ7Wac+j0YS+F5FXCn53sZvoNzLNNA+iXutcGYqqqPF3J+961p0I/0DBK0kk0iDVEGwKous/aqxHsZLC1ohSw6Z+rSndHpiXINdPbeVw+6HUydybX28EJOEcx2pNXXRscTNUUb+NKWbIV5+XbCSUttiZbUGfP+5U7ZN4w7XYmrywIyLThixuti7kt3nkPK+5krRldtxum3HmhIwPddXLV4UzDnktdQ2cXyj2LFZRmvLupNN5n/ut5Ky/zwIDAQAB",
   "permissions": [

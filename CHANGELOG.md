@@ -4,6 +4,8 @@ All notable public DarwinRelay changes will be documented here.
 
 ## Unreleased
 
+## 0.6.6 — 2026-08-22
+
 - Fixed process ownership for manual updates and the kill switch: DarwinRelay now reclaims/verifies only the `cloudflared` process recorded in its own pidfile instead of treating unrelated tunnels on the Mac as survivors, deploy PID checks use the same ownership boundary, and the updater verifies/uses the target release's `disable.sh` before changing HEAD so a newer release can repair containment logic in an older installation.
 ## 0.6.5 — 2026-08-22
 

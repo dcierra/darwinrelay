@@ -1,6 +1,6 @@
 {
   "name": "darwinrelay",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "type": "module",
   "description": "Turn ChatGPT and other MCP clients into local agents on macOS \u2014 shell, files, PTY, browser, native desktop control, and Codex history.",
   "scripts": {
