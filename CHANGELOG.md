@@ -4,6 +4,8 @@ All notable public DarwinRelay changes will be documented here.
 
 ## Unreleased
 
+## 0.6.9 — 2026-08-22
+
 - Added a manual **Update DarwinRelay…** menu-bar action: after explicit confirmation it opens an independent Terminal `.command` that invokes the canonical `scripts/update.sh latest --yes`, so the updater survives its own app restart without duplicating transaction logic in Swift. The canonical updater now also takes an advisory single-transaction lock, and closing the terminal delivers a HUP rollback path instead of risking parallel or half-applied updates.
 - Manual updates now preserve an already-ready native desktop capability as a checked postcondition: readiness is measured through the authenticated live MCP runtime (not the updater terminal's unrelated TCC context), and DarwinRelay rolls back if Accessibility/Screen/Input do not recover after the app replacement.
 - Hardened manual-update containment against asynchronous `launchctl bootout`: product LaunchAgents are disabled before bootout and DarwinRelay waits until launchd proves the service is absent before killing child processes, preventing KeepAlive relaunch races observed during real v0.6.6 → v0.6.8 validation.
