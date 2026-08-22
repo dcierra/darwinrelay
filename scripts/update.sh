@@ -80,7 +80,12 @@ fi
 
 ROOT="${DARWINRELAY_UPDATE_ROOT:?missing DARWINRELAY_UPDATE_ROOT}"
 SELF="$0"
-trap 'rm -f "$SELF" 2>/dev/null || true' EXIT
+TARGET_DISABLE_SCRIPT=""
+cleanup_update_helper() {
+  rm -f "$SELF" 2>/dev/null || true
+  [[ -z "$TARGET_DISABLE_SCRIPT" ]] || rm -f "$TARGET_DISABLE_SCRIPT" 2>/dev/null || true
+}
+trap cleanup_update_helper EXIT
 
 TARGET_REQUEST="latest"
 TARGET_SET=0
@@ -98,7 +103,7 @@ for arg in "$@"; do
   esac
 done
 
-for tool in git node npm codesign launchctl curl plutil ps awk sed grep; do
+for tool in git node npm codesign launchctl curl plutil ps awk sed grep shasum; do
   command -v "$tool" >/dev/null 2>&1 || { echo "Required tool not found: $tool" >&2; exit 69; }
 done
 [[ "$(uname -s)" == "Darwin" ]] || { echo "DarwinRelay's installed-app updater is macOS-only." >&2; exit 69; }
@@ -193,6 +198,20 @@ if (( ASSUME_YES == 0 )); then
   case "$answer" in y|Y|yes|YES) ;; *) echo "Update cancelled."; exit 0 ;; esac
 fi
 
+# Use the target release's kill-switch before changing HEAD. This lets a newer
+# release repair containment logic in an older installed updater. Verify the
+# extracted script against the target release's integrity manifest before it is
+# executed.
+TARGET_DISABLE_SCRIPT="$(mktemp "${TMPDIR:-/tmp}/darwinrelay-disable-target.XXXXXX")"
+git show "${TARGET_SHA}:scripts/disable.sh" > "$TARGET_DISABLE_SCRIPT"
+TARGET_DISABLE_EXPECTED="$(git show "${TARGET_SHA}:SHA256SUMS" | awk '$2 == "scripts/disable.sh" {print $1; exit}')"
+TARGET_DISABLE_ACTUAL="$(shasum -a 256 "$TARGET_DISABLE_SCRIPT" | awk '{print $1}')"
+[[ -n "$TARGET_DISABLE_EXPECTED" && "$TARGET_DISABLE_ACTUAL" == "$TARGET_DISABLE_EXPECTED" ]] || {
+  echo "Target release kill-switch failed integrity verification." >&2
+  exit 78
+}
+chmod 700 "$TARGET_DISABLE_SCRIPT"
+
 DOMAIN="gui/$(id -u)"
 SERVICE_LABEL="io.github.dcierra.darwinrelay.http"
 SERVICE_PLIST="$HOME/Library/LaunchAgents/$SERVICE_LABEL.plist"
@@ -244,7 +263,7 @@ trap 'rollback_update 130' INT TERM
 
 # Stop before replacing source files. This is deliberately fail-closed: no MCP
 # mutation authority remains live while the checkout is between release states.
-./scripts/disable.sh
+DARWINRELAY_INSTALL_DIR="$ROOT" "$TARGET_DISABLE_SCRIPT"
 if [[ -n "$OLD_MENU_PID" ]] && kill -0 "$OLD_MENU_PID" 2>/dev/null; then
   kill -TERM "$OLD_MENU_PID" 2>/dev/null || true
   attempts=50

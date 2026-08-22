@@ -30,6 +30,7 @@ FOREGROUND_GUI_APPROVAL_FILE="${DARWINRELAY_FOREGROUND_GUI_APPROVAL_FILE:-$DATA_
 # would silently search a directory the bridge never writes to.
 JOB_DIR="$DATA_DIR/jobs"
 PID_FILE="$DATA_DIR/mcp-http.pid"
+TUNNEL_PID_FILE="$DATA_DIR/cloudflared.pid"
 CHROME_NATIVE_PID_FILE="$DATA_DIR/chrome-native-host.pid"
 CHROME_BACKGROUND_SOCKET="$DATA_DIR/chrome-background.sock"
 BACKGROUND_CHROME_GRANT_DIR="$DATA_DIR/chrome-background-grants"
@@ -185,6 +186,36 @@ stop_pids() { # label, pids...
   done
 }
 
+# Resolve a pidfile only when it still names the expected executable. This is
+# the ownership boundary for long-lived processes that may have unrelated peers
+# with the same basename elsewhere on the Mac (notably cloudflared).
+recorded_executable_pid() { # pidfile, executable basename
+  local pid_file="$1" expected="$2" raw pid comm
+  [[ -f "$pid_file" ]] || return 1
+  raw="$(head -1 "$pid_file" 2>/dev/null || true)"
+  raw="${raw#"${raw%%[![:space:]]*}"}"
+  raw="${raw%"${raw##*[![:space:]]}"}"
+  if ! valid_target "$raw"; then
+    printf 'Removing unusable pidfile: %s\n' "$pid_file" >&2
+    rm -f "$pid_file" 2>/dev/null || true
+    return 1
+  fi
+  pid="$raw"
+  if ! kill -0 "$pid" 2>/dev/null; then
+    rm -f "$pid_file" 2>/dev/null || true
+    return 1
+  fi
+  comm="$(ps -o comm= -p "$pid" 2>/dev/null || true)"
+  comm="${comm#"${comm%%[![:space:]]*}"}"
+  comm="${comm%"${comm##*[![:space:]]}"}"
+  if [[ "${comm##*/}" != "$expected" ]]; then
+    printf 'Ignoring stale pidfile: pid %s is not %s\n' "$pid" "$expected" >&2
+    rm -f "$pid_file" 2>/dev/null || true
+    return 1
+  fi
+  printf '%s\n' "$pid"
+}
+
 # --- unlock file ------------------------------------------------------------
 if [[ -e "$UNLOCK_FILE" || -L "$UNLOCK_FILE" ]] && [[ ! -f "$UNLOCK_FILE" ]]; then
   # A directory or dangling symlink here is not "absent" — it is an unlock path
@@ -261,6 +292,19 @@ if [[ -n "$LAUNCHCTL_BIN" && -x "$LAUNCHCTL_BIN" ]]; then
       still_running=1
     fi
   done
+fi
+
+# --- owned public tunnel ----------------------------------------------------
+# The menu app writes the pid of the cloudflared process it owns. Do not use a
+# global `pgrep cloudflared`: other products and user projects may legitimately
+# run their own tunnels and are neither DarwinRelay authority nor ours to kill.
+owned_tunnel_pid="$(recorded_executable_pid "$TUNNEL_PID_FILE" cloudflared || true)"
+if [[ -n "$owned_tunnel_pid" ]]; then
+  printf 'Stopping DarwinRelay cloudflared tunnel (pid %s)\n' "$owned_tunnel_pid"
+  if ! kill -TERM "-$owned_tunnel_pid" 2>/dev/null; then
+    kill -TERM "$owned_tunnel_pid" 2>/dev/null || true
+  fi
+  did_something=1
 fi
 
 # --- serving processes ------------------------------------------------------
@@ -358,6 +402,13 @@ fi
 sleep 1
 
 # --- escalate ---------------------------------------------------------------
+if [[ -n "${owned_tunnel_pid:-}" ]] && kill -0 "$owned_tunnel_pid" 2>/dev/null; then
+  printf '  DarwinRelay cloudflared pid %s ignored SIGTERM, sending SIGKILL\n' "$owned_tunnel_pid"
+  if ! kill -KILL "-$owned_tunnel_pid" 2>/dev/null; then
+    kill -KILL "$owned_tunnel_pid" 2>/dev/null || true
+  fi
+fi
+
 for script in mcp-http.mjs bridge.mjs chrome-native-host.mjs; do
   pids=$(pids_for_script "$script")
   for pid in $pids; do
@@ -384,6 +435,15 @@ for script in mcp-http.mjs bridge.mjs chrome-native-host.mjs; do
     still_running=1
   fi
 done
+
+# Re-read the tunnel pidfile after escalation. This catches both a survivor and
+# an unexpected replacement process; stale/dead records are removed by the same
+# executable-identity check.
+remaining_tunnel_pid="$(recorded_executable_pid "$TUNNEL_PID_FILE" cloudflared || true)"
+if [[ -n "$remaining_tunnel_pid" ]]; then
+  printf '\nWARNING: DarwinRelay cloudflared is STILL RUNNING after SIGKILL: %s\n' "$remaining_tunnel_pid"
+  still_running=1
+fi
 
 # A SIGKILL cannot run the native host's cleanup handlers. Once the process
 # verification above proves it is gone, stale control-plane artifacts are safe
@@ -419,12 +479,9 @@ if curl -fsS --max-time 3 "http://127.0.0.1:$HTTP_PORT/healthz" >/dev/null 2>&1;
   still_running=1
 fi
 
-# Match the executable, not any command line mentioning the word.
-if pgrep -x cloudflared >/dev/null 2>&1; then
-  printf '\nNOTE: cloudflared is still running, so the public hostname may still resolve.\n'
-  printf 'Stop it with:  pkill -f "cloudflared tunnel"\n'
-  still_running=1
-fi
+# Unrelated cloudflared processes are intentionally outside this product's
+# ownership boundary. Containment above is established from the DarwinRelay
+# tunnel pidfile plus executable identity, never a global process-name match.
 
 printf '\n'
 if (( still_running )); then
@@ -433,9 +490,9 @@ if (( still_running )); then
   exit 1
 fi
 if (( did_something )); then
-  printf 'Disabled. Re-checked after SIGKILL: no front end, no bridge, no background\n'
-  printf 'Chrome native host, no recorded background jobs running, and nothing answers\n'
-  printf 'on 127.0.0.1:%s.\n' "$HTTP_PORT"
+  printf 'Disabled. Re-checked after SIGKILL: no recorded DarwinRelay tunnel, no front\n'
+  printf 'end, no bridge, no background Chrome native host, no recorded background jobs\n'
+  printf 'running, and nothing answers on 127.0.0.1:%s.\n' "$HTTP_PORT"
 else
   printf 'Nothing was running and no unlock file was present.\n'
 fi

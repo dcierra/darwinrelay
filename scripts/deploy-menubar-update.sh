@@ -5,6 +5,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 APP_DIR="${DARWINRELAY_APP_INSTALL_DIR:-/Applications}"
 APP="$APP_DIR/DarwinRelay.app"
 ROLLBACK="$APP_DIR/.DarwinRelay.app.rollback"
+DATA_DIR="${DARWINRELAY_DATA_DIR:-$HOME/Library/Application Support/DarwinRelay}"
+TUNNEL_PID_FILE="$DATA_DIR/cloudflared.pid"
 PS_BIN="${PS_BIN:-$(command -v ps 2>/dev/null || true)}"
 
 pid_for_process_name() {
@@ -26,6 +28,21 @@ pid_for_command_contains() {
   } END { if (found) print found }'
 }
 
+pid_for_recorded_executable() { # pidfile, executable basename
+  local pid_file="$1" expected="$2" raw comm
+  [[ -f "$pid_file" ]] || return 0
+  raw="$(head -1 "$pid_file" 2>/dev/null || true)"
+  raw="${raw#"${raw%%[![:space:]]*}"}"
+  raw="${raw%"${raw##*[![:space:]]}"}"
+  [[ "$raw" =~ ^[0-9]+$ ]] && (( raw >= 2 )) || return 0
+  [[ -n "$PS_BIN" && -x "$PS_BIN" ]] || return 69
+  comm="$("$PS_BIN" -o comm= -p "$raw" 2>/dev/null || true)"
+  comm="${comm#"${comm%%[![:space:]]*}"}"
+  comm="${comm%"${comm##*[![:space:]]}"}"
+  [[ "${comm##*/}" == "$expected" ]] || return 0
+  printf '%s\n' "$raw"
+}
+
 check_pid_unchanged() {
   local name="$1" before="$2" after="$3"
   if [[ -n "$before" && "$before" != "$after" ]]; then
@@ -38,19 +55,19 @@ main() {
   local before_menu before_http before_cf after_menu after_http after_cf helper_status
   before_menu="$(pid_for_process_name DarwinRelay)"
   before_http="$(pid_for_command_contains "$ROOT/mcp-http.mjs")"
-  before_cf="$(pid_for_command_contains "cloudflared tunnel")"
+  before_cf="$(pid_for_recorded_executable "$TUNNEL_PID_FILE" cloudflared)"
 
   DARWINRELAY_INSTALL_APP=1 \
   DARWINRELAY_APP_INSTALL_DIR="$APP_DIR" \
     "$ROOT/menubar/build.sh"
 
   codesign --verify --deep --strict "$APP"
-  helper_status="$($APP/Contents/Helpers/MacUIHelper status <<<'{}')"
+  helper_status="$("$APP/Contents/Helpers/MacUIHelper" status <<<'{}')"
   [[ "$helper_status" == *'"ok":true'* ]]
 
   after_menu="$(pid_for_process_name DarwinRelay)"
   after_http="$(pid_for_command_contains "$ROOT/mcp-http.mjs")"
-  after_cf="$(pid_for_command_contains "cloudflared tunnel")"
+  after_cf="$(pid_for_recorded_executable "$TUNNEL_PID_FILE" cloudflared)"
 
   check_pid_unchanged menu "$before_menu" "$after_menu"
   check_pid_unchanged http "$before_http" "$after_http"

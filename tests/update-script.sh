@@ -41,4 +41,16 @@ grep -Fq 'check:integrity' "$ROOT/scripts/update.sh"
 grep -Fq 'Refusing to update a modified checkout' "$ROOT/scripts/update.sh"
 grep -Fq 'Refusing moved tag' "$ROOT/scripts/update.sh"
 
+
+# The updater must be able to use a target release's corrected kill-switch before
+# changing HEAD; otherwise a bug in the currently installed disable.sh can make
+# the update path impossible to repair.
+# shellcheck disable=SC2016
+pattern='git show "${TARGET_SHA}:scripts/disable.sh"'
+grep -Fq "$pattern" "$ROOT/scripts/update.sh"
+grep -Fq 'TARGET_DISABLE_EXPECTED=' "$ROOT/scripts/update.sh"
+# shellcheck disable=SC2016
+pattern='DARWINRELAY_INSTALL_DIR="$ROOT" "$TARGET_DISABLE_SCRIPT"'
+grep -Fq "$pattern" "$ROOT/scripts/update.sh"
+
 echo "manual updater test passed"
