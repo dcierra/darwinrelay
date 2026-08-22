@@ -21,6 +21,10 @@ plutil -lint "$PLIST" >/dev/null
 grep -Fq "$APP/Contents/MacOS/DarwinRelay" "$PLIST"
 grep -Fq "$ROOT" "$PLIST"
 grep -Fq '<key>SuccessfulExit</key><false/>' "$PLIST"
+if grep -Fq '<key>WorkingDirectory</key>' "$PLIST"; then
+  echo "HTTP LaunchAgent must not chdir into the source checkout; launchd may lack TCC access to ~/Documents before the signed app starts" >&2
+  exit 1
+fi
 [[ "$(stat -f '%Lp' "$PLIST")" == "600" ]]
 
 # Auto mode must recognise an already-running DarwinRelay by process basename
