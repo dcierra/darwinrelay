@@ -85,6 +85,32 @@ chmod +x "$TMP/launchctl"
 LAUNCHCTL_BIN="$TMP/launchctl"
 [[ "$(launchagent_running_pid gui/501 io.github.dcierra.darwinrelay.http)" == "101" ]]
 
+# Previously-ready native desktop is a postcondition, with bounded retry for the
+# short TCC cache window after an atomic app replacement.
+cat > "$TMP/desktop-doctor-retry" <<'SH'
+#!/bin/bash
+COUNT_FILE="${DR_TEST_COUNT_FILE:?}"
+n=0
+[[ ! -f "$COUNT_FILE" ]] || n="$(cat "$COUNT_FILE")"
+n=$((n + 1))
+printf '%s\n' "$n" > "$COUNT_FILE"
+(( n >= 3 ))
+SH
+chmod +x "$TMP/desktop-doctor-retry"
+DR_TEST_COUNT_FILE="$TMP/desktop-count" wait_native_desktop_ready "$TMP/desktop-doctor-retry" 5 0.01
+[[ "$(cat "$TMP/desktop-count")" == 3 ]]
+cat > "$TMP/desktop-doctor-never" <<'SH'
+#!/bin/bash
+exit 2
+SH
+chmod +x "$TMP/desktop-doctor-never"
+if wait_native_desktop_ready "$TMP/desktop-doctor-never" 2 0.01; then
+  echo "native desktop readiness wait accepted permanent failure" >&2
+  exit 1
+fi
+grep -Fq 'Native desktop was READY before update but did not recover' "$ROOT/scripts/update.sh"
+grep -Fq 'Native desktop permissions preserved after update.' "$ROOT/scripts/update.sh"
+
 grep -Fq 'Re-establish a contained baseline immediately' "$ROOT/scripts/update.sh"
 grep -Fq 'LAUNCHAGENT_PID="$(wait_launchagent_running "$DOMAIN" "$SERVICE_LABEL")"' "$ROOT/scripts/update.sh"
 grep -Fq 'HTTP LaunchAgent owns the live menu runtime' "$ROOT/scripts/update.sh"

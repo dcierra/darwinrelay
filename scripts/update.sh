@@ -127,6 +127,18 @@ wait_launchagent_running() { # domain, label
   return 1
 }
 
+wait_native_desktop_ready() { # doctor-bin, attempts, interval-seconds
+  local doctor_bin="$1" attempts="${2:-100}" interval="${3:-0.2}"
+  while (( attempts > 0 )); do
+    if "$doctor_bin" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep "$interval"
+    attempts=$((attempts - 1))
+  done
+  return 1
+}
+
 if [[ "${DARWINRELAY_UPDATE_LIBRARY_ONLY:-0}" == "1" ]]; then
   if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
     return 0
@@ -230,6 +242,14 @@ APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$
 }
 
 npm run check:integrity >/dev/null
+
+# Preserve already-configured native desktop capability as an update postcondition.
+# macOS can briefly report stale TCC state immediately after an atomic bundle
+# replacement even when the helper's designated requirement is unchanged.
+OLD_DESKTOP_READY=0
+if "$ROOT/scripts/desktop-doctor.sh" >/dev/null 2>&1; then
+  OLD_DESKTOP_READY=1
+fi
 
 if (( CANDIDATE_MODE == 1 )); then
   (( TARGET_SET == 0 )) || { echo "Do not combine maintainer candidate mode with a release tag argument." >&2; exit 64; }
@@ -418,6 +438,14 @@ launchctl bootstrap "$DOMAIN" "$SERVICE_PLIST"
 LAUNCHAGENT_PID="$(wait_launchagent_running "$DOMAIN" "$SERVICE_LABEL")"
 [[ "$(darwinrelay_menu_pids | /usr/bin/awk -v pid="$LAUNCHAGENT_PID" '$1 == pid {print $1; exit}')" == "$LAUNCHAGENT_PID" ]]
 wait_health
+
+if (( OLD_DESKTOP_READY == 1 )); then
+  if ! wait_native_desktop_ready "./scripts/desktop-doctor.sh" 100 0.2; then
+    echo "Native desktop was READY before update but did not recover after the app replacement; rolling back." >&2
+    false
+  fi
+  echo "Native desktop permissions preserved after update."
+fi
 
 DOCTOR_OUT="$(./scripts/doctor.sh --transport http)"
 printf '%s\n' "$DOCTOR_OUT"

@@ -4,6 +4,7 @@ All notable public DarwinRelay changes will be documented here.
 
 ## Unreleased
 
+- Manual updates now preserve an already-ready native desktop capability as a checked postcondition: after replacing the app, DarwinRelay waits for the signed helper TCC state to recover within a bounded grace window and rolls back instead of silently leaving Accessibility/Screen/Input unavailable.
 - Hardened manual-update containment against asynchronous `launchctl bootout`: product LaunchAgents are disabled before bootout and DarwinRelay waits until launchd proves the service is absent before killing child processes, preventing KeepAlive relaunch races observed during real v0.6.6 → v0.6.8 validation.
 - Added a maintainer-only pre-release updater harness that can exercise an exact clean candidate commit on a real Mac before any public tag exists, including an injected post-install rollback check and a full validated round-trip back to the prior stable release. The normal user updater remains canonical-release-only.
 ## 0.6.8 — 2026-08-22
