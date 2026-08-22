@@ -4,6 +4,8 @@ All notable public DarwinRelay changes will be documented here.
 
 ## Unreleased
 
+## 0.6.3 — 2026-08-22
+
 - Made normal virtual AI cursor moves transient: `ui_cursor action=move` now auto-hides after 2.5 seconds by default (configurable per call, with `0` as an explicit persistent override), while `show` remains the deliberate persistent mode. This prevents the click-through DarwinRelay cursor from lingering on the operator desktop after an agent stops using it.
 - Updated the menu-bar ChatGPT setup copy to the current Apps/developer-mode terminology, separated core runtime health from optional native/FDA capabilities, and routed permission remediation to the specific Accessibility, Screen Recording, or Full Disk Access pane.
 - Reworked `scripts/doctor.sh` into a transport-aware core readiness gate with explicit remediation, app/runtime consistency checks, token-file mode validation, and a real local MCP `initialize → bridge_status` smoke probe; optional desktop/FDA/Chrome/Codex status no longer makes a healthy core coding path fail.
