@@ -4,6 +4,8 @@ All notable public DarwinRelay changes will be documented here.
 
 ## Unreleased
 
+- Hardened manual-update containment against asynchronous `launchctl bootout`: product LaunchAgents are disabled before bootout and DarwinRelay waits until launchd proves the service is absent before killing child processes, preventing KeepAlive relaunch races observed during real v0.6.6 → v0.6.8 validation.
+- Added a maintainer-only pre-release updater harness that can exercise an exact clean candidate commit on a real Mac before any public tag exists, including an injected post-install rollback check and a full validated round-trip back to the prior stable release. The normal user updater remains canonical-release-only.
 ## 0.6.8 — 2026-08-22
 
 - Fixed the manual update transaction discovered during the real v0.6.6 → v0.6.7 validation: deploy process discovery now snapshots `ps` before running its matcher so the matcher cannot identify its own argv as `mcp-http.mjs`; the updater invokes app deployment in an explicit stopped-runtime mode rather than applying zero-downtime PID invariants; and rollback restores/rebuilds the old app based on actual bundle versions instead of a post-success flag.

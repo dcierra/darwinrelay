@@ -167,9 +167,20 @@ Before a public release:
 npm run check
 npm test
 gitleaks git --config .gitleaks.toml --redact=100 .
+npm run update:integrity
+npm run check:integrity
 ```
 
-Then regenerate and verify `SHA256SUMS` for tracked regular source files, ensure the tree is clean, and tag the exact verified commit.
+For any change that can affect installation, lifecycle, launchd ownership, rollback, or self-update behavior, hosted/unit checks are not the release gate by themselves. Commit the exact candidate in a separate clean worktree and, **before creating a public tag**, run both real-Mac pre-release transactions from an independent local shell:
+
+```bash
+./scripts/test-update-candidate.sh --rollback-check --yes
+./scripts/test-update-candidate.sh --yes
+```
+
+The first injects a failure immediately after the app swap and must restore the prior release. The second lets the candidate reach full LaunchAgent ownership + authenticated doctor validation and then deliberately rolls back, proving a full round-trip without leaving production on an unpublished commit. `scripts/test-update-candidate.sh` is maintainer-only; the public `scripts/update.sh` remains release-tag-only. **Do not create a public tag merely to obtain a realistic updater target.**
+
+After PR merge, compare the tested candidate tree with the exact merge commit. If squash changed the commit SHA, the tree may still be equivalent; tag only after the merge tree is proven identical to the locally tested candidate tree and required post-merge CI/CodeQL is green. If the tree differs, rerun the real-Mac candidate transaction on the exact new tree before tagging.
 
 ### Installed-runtime updates
 

@@ -199,6 +199,8 @@ Do not run a self-update as a long mutation chain owned only by the DarwinRelay 
 
 After reconnect, call `bridge_status` and confirm the installed app/runtime versions match. If the release changes the unpacked background-Chrome extension, reload **DarwinRelay Background Browser** only in the dedicated DarwinRelay Chrome profile and verify `backgroundChrome.extension.version` plus a background tab smoke test.
 
+Maintainers validating updater/lifecycle changes must not use a newly published tag as the test fixture. From a separate clean candidate worktree, run `./scripts/test-update-candidate.sh --rollback-check --yes` and then `./scripts/test-update-candidate.sh --yes` **before** tagging. These are destructive-to-runtime/restart tests intended only for an explicitly approved maintainer Mac; both return production to its original stable release when they pass.
+
 ## Common failure states
 
 ### `UI_ELEMENT_STALE`

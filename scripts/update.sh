@@ -157,6 +157,24 @@ trap cleanup_update_helper EXIT
 TARGET_REQUEST="latest"
 TARGET_SET=0
 ASSUME_YES=0
+CANDIDATE_MODE=0
+CANDIDATE_SHA="${DARWINRELAY_UPDATE_CANDIDATE_SHA:-}"
+CANDIDATE_ACK="I_UNDERSTAND_THIS_INSTALLS_UNPUBLISHED_DARWINRELAY_CODE"
+if [[ -n "$CANDIDATE_SHA" ]]; then
+  [[ "${DARWINRELAY_MAINTAINER_CANDIDATE_TEST:-}" == "$CANDIDATE_ACK" ]] || {
+    echo "Unpublished candidate mode is maintainer-only and requires the explicit candidate-test acknowledgement." >&2
+    exit 64
+  }
+  CANDIDATE_MODE=1
+fi
+CANDIDATE_FAILPOINT="${DARWINRELAY_UPDATE_CANDIDATE_FAILPOINT:-}"
+if [[ -n "$CANDIDATE_FAILPOINT" ]]; then
+  (( CANDIDATE_MODE == 1 )) || { echo "Candidate failpoints are unavailable outside maintainer candidate mode." >&2; exit 64; }
+  case "$CANDIDATE_FAILPOINT" in
+    after_app_install|after_validation) ;;
+    *) echo "Unknown candidate failpoint: $CANDIDATE_FAILPOINT" >&2; exit 64 ;;
+  esac
+fi
 for arg in "$@"; do
   case "$arg" in
     -h|--help) usage; exit 0 ;;
@@ -213,44 +231,56 @@ APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$
 
 npm run check:integrity >/dev/null
 
-if [[ "$TARGET_REQUEST" == "latest" ]]; then
-  TARGET_TAG="$(latest_stable_tag_from_origin origin)"
-  [[ -n "$TARGET_TAG" ]] || { echo "No stable DarwinRelay release tags found on origin." >&2; exit 69; }
+if (( CANDIDATE_MODE == 1 )); then
+  (( TARGET_SET == 0 )) || { echo "Do not combine maintainer candidate mode with a release tag argument." >&2; exit 64; }
+  git cat-file -e "${CANDIDATE_SHA}^{commit}" 2>/dev/null || { echo "Candidate commit is not present in this repository: $CANDIDATE_SHA" >&2; exit 69; }
+  TARGET_SHA="$(git rev-parse "${CANDIDATE_SHA}^{commit}")"
+  TARGET_PACKAGE_VERSION="$(git show "${TARGET_SHA}:package.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).version))')"
+  is_release_tag "v$TARGET_PACKAGE_VERSION" || { echo "Candidate package version must be a stable semver: $TARGET_PACKAGE_VERSION" >&2; exit 78; }
+  TARGET_VERSION="$TARGET_PACKAGE_VERSION"
+  TARGET_TAG="candidate:$TARGET_VERSION@${TARGET_SHA:0:12}"
+  CMP="$(semver_cmp "v$TARGET_VERSION" "$OLD_TAG")"
+  [[ "$CMP" == "1" ]] || { echo "Candidate version must be newer than $OLD_TAG (candidate=$TARGET_VERSION)." >&2; exit 78; }
 else
-  TARGET_TAG="$TARGET_REQUEST"
-fi
-is_release_tag "$TARGET_TAG" || { echo "Invalid release tag: $TARGET_TAG" >&2; exit 64; }
-CMP="$(semver_cmp "$TARGET_TAG" "$OLD_TAG")"
-if [[ "$CMP" == "0" ]]; then
-  echo "DarwinRelay is already on $OLD_TAG."
-  exit 0
-elif [[ "$CMP" == "-1" ]]; then
-  echo "Refusing downgrade $OLD_TAG -> $TARGET_TAG. Use the retained rollback path for recovery instead." >&2
-  exit 78
-fi
+  if [[ "$TARGET_REQUEST" == "latest" ]]; then
+    TARGET_TAG="$(latest_stable_tag_from_origin origin)"
+    [[ -n "$TARGET_TAG" ]] || { echo "No stable DarwinRelay release tags found on origin." >&2; exit 69; }
+  else
+    TARGET_TAG="$TARGET_REQUEST"
+  fi
+  is_release_tag "$TARGET_TAG" || { echo "Invalid release tag: $TARGET_TAG" >&2; exit 64; }
+  CMP="$(semver_cmp "$TARGET_TAG" "$OLD_TAG")"
+  if [[ "$CMP" == "0" ]]; then
+    echo "DarwinRelay is already on $OLD_TAG."
+    exit 0
+  elif [[ "$CMP" == "-1" ]]; then
+    echo "Refusing downgrade $OLD_TAG -> $TARGET_TAG. Use the retained rollback path for recovery instead." >&2
+    exit 78
+  fi
 
-REMOTE_TAG_OBJECT="$(git ls-remote --refs origin "refs/tags/$TARGET_TAG" | /usr/bin/awk 'NR==1{print $1}')"
-[[ -n "$REMOTE_TAG_OBJECT" ]] || { echo "Release tag not found on canonical origin: $TARGET_TAG" >&2; exit 69; }
-if git show-ref --verify --quiet "refs/tags/$TARGET_TAG"; then
-  LOCAL_TAG_OBJECT="$(git rev-parse "refs/tags/$TARGET_TAG")"
-  [[ "$LOCAL_TAG_OBJECT" == "$REMOTE_TAG_OBJECT" ]] || {
-    echo "Refusing moved tag $TARGET_TAG (local=$LOCAL_TAG_OBJECT remote=$REMOTE_TAG_OBJECT)." >&2
-    exit 78
-  }
-else
-  git fetch --quiet origin "refs/tags/$TARGET_TAG:refs/tags/$TARGET_TAG"
-  [[ "$(git rev-parse "refs/tags/$TARGET_TAG")" == "$REMOTE_TAG_OBJECT" ]] || {
-    echo "Fetched tag object did not match origin for $TARGET_TAG." >&2
+  REMOTE_TAG_OBJECT="$(git ls-remote --refs origin "refs/tags/$TARGET_TAG" | /usr/bin/awk 'NR==1{print $1}')"
+  [[ -n "$REMOTE_TAG_OBJECT" ]] || { echo "Release tag not found on canonical origin: $TARGET_TAG" >&2; exit 69; }
+  if git show-ref --verify --quiet "refs/tags/$TARGET_TAG"; then
+    LOCAL_TAG_OBJECT="$(git rev-parse "refs/tags/$TARGET_TAG")"
+    [[ "$LOCAL_TAG_OBJECT" == "$REMOTE_TAG_OBJECT" ]] || {
+      echo "Refusing moved tag $TARGET_TAG (local=$LOCAL_TAG_OBJECT remote=$REMOTE_TAG_OBJECT)." >&2
+      exit 78
+    }
+  else
+    git fetch --quiet origin "refs/tags/$TARGET_TAG:refs/tags/$TARGET_TAG"
+    [[ "$(git rev-parse "refs/tags/$TARGET_TAG")" == "$REMOTE_TAG_OBJECT" ]] || {
+      echo "Fetched tag object did not match origin for $TARGET_TAG." >&2
+      exit 78
+    }
+  fi
+  TARGET_SHA="$(git rev-list -n1 "$TARGET_TAG")"
+  TARGET_VERSION="${TARGET_TAG#v}"
+  TARGET_PACKAGE_VERSION="$(git show "${TARGET_SHA}:package.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).version))')"
+  [[ "$TARGET_PACKAGE_VERSION" == "$TARGET_VERSION" ]] || {
+    echo "Release metadata mismatch: $TARGET_TAG points to package version $TARGET_PACKAGE_VERSION." >&2
     exit 78
   }
 fi
-TARGET_SHA="$(git rev-list -n1 "$TARGET_TAG")"
-TARGET_VERSION="${TARGET_TAG#v}"
-TARGET_PACKAGE_VERSION="$(git show "${TARGET_SHA}:package.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).version))')"
-[[ "$TARGET_PACKAGE_VERSION" == "$TARGET_VERSION" ]] || {
-  echo "Release metadata mismatch: $TARGET_TAG points to package version $TARGET_PACKAGE_VERSION." >&2
-  exit 78
-}
 OLD_EXTENSION_VERSION="$(git show "${OLD_SHA}:chrome-extension/manifest.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).version))')"
 TARGET_EXTENSION_VERSION="$(git show "${TARGET_SHA}:chrome-extension/manifest.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).version))')"
 
@@ -363,6 +393,10 @@ npm run check:integrity >/dev/null
 DARWINRELAY_DEPLOY_VERIFY_RUNTIME_PIDS=0 DARWINRELAY_APP_INSTALL_DIR="$APP_DIR" ./scripts/deploy-menubar-update.sh
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" == "$TARGET_VERSION" ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_DIR/.DarwinRelay.app.rollback/Contents/Info.plist")" == "$OLD_VERSION" ]]
+if (( CANDIDATE_MODE == 1 )) && [[ "$CANDIDATE_FAILPOINT" == "after_app_install" ]]; then
+  echo "Maintainer candidate failpoint: after_app_install" >&2
+  false
+fi
 
 # Installing/replacing an app bundle can race with a pre-existing LaunchServices or
 # manually launched menu instance. Re-establish a contained baseline immediately
@@ -389,8 +423,16 @@ DOCTOR_OUT="$(./scripts/doctor.sh --transport http)"
 printf '%s\n' "$DOCTOR_OUT"
 [[ "$DOCTOR_OUT" == *"CORE VERDICT: READY"* ]]
 [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
-[[ "$(git describe --tags --exact-match)" == "$TARGET_TAG" ]]
+if (( CANDIDATE_MODE == 0 )); then
+  [[ "$(git describe --tags --exact-match)" == "$TARGET_TAG" ]]
+else
+  [[ "$(node -p 'require("./package.json").version')" == "$TARGET_VERSION" ]]
+fi
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" == "$TARGET_VERSION" ]]
+if (( CANDIDATE_MODE == 1 )) && [[ "$CANDIDATE_FAILPOINT" == "after_validation" ]]; then
+  echo "Maintainer candidate failpoint: after_validation" >&2
+  false
+fi
 
 trap - ERR INT TERM
 printf '\nDarwinRelay update complete: %s -> %s\n' "$OLD_TAG" "$TARGET_TAG"

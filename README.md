@@ -195,6 +195,8 @@ It deliberately does **not** use `git pull`, `git reset --hard`, or delete local
 
 Because the background Chrome extension is loaded unpacked from this checkout, a release that changes its manifest/source may require one manual **Reload** from Chrome's Extensions page in the dedicated **DarwinRelay** profile. The updater reports this when the extension version changes; never substitute a personal profile.
 
+For project maintainers, updater/lifecycle changes have an additional pre-release gate: the exact untagged candidate is exercised on a real Mac with `scripts/test-update-candidate.sh` before a public tag is created. This is deliberately separate from the user-facing updater so arbitrary commits never become a normal update target.
+
 ### 3. Connect ChatGPT
 
 Open the **DR** menu-bar item and press **Start**. When the MCP transport is running, choose **Copy ChatGPT Setup** and follow [docs/CHATGPT.md](docs/CHATGPT.md).

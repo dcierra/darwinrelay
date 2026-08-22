@@ -117,4 +117,20 @@ assert 'DARWINRELAY_DEPLOY_VERIFY_RUNTIME_PIDS=0' in s
 assert 'APP_SWAPPED' not in s
 PY2
 
+
+# Public updater stays release-only. Unpublished SHA testing is reachable only
+# through the explicit maintainer acknowledgement and separate harness.
+grep -Fq 'DARWINRELAY_UPDATE_CANDIDATE_SHA' "$ROOT/scripts/update.sh"
+grep -Fq 'I_UNDERSTAND_THIS_INSTALLS_UNPUBLISHED_DARWINRELAY_CODE' "$ROOT/scripts/update.sh"
+grep -Fq 'after_app_install|after_validation' "$ROOT/scripts/update.sh"
+grep -Fq 'scripts/test-update-candidate.sh' "$ROOT/AGENTS.md"
+if grep -Fq -- '--candidate' "$ROOT/scripts/update.sh"; then
+  echo "public updater unexpectedly exposes arbitrary candidate CLI" >&2
+  exit 1
+fi
+grep -Fq 'Candidate worktree must be clean and committed.' "$ROOT/scripts/test-update-candidate.sh"
+grep -Fq 'Candidate and installed checkout must share the same canonical Git object store.' "$ROOT/scripts/test-update-candidate.sh"
+grep -Fq 'Candidate full round-trip passed' "$ROOT/scripts/test-update-candidate.sh"
+grep -Fq 'Candidate rollback check passed' "$ROOT/scripts/test-update-candidate.sh"
+
 echo "manual updater test passed"
