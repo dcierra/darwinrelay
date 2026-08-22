@@ -89,6 +89,15 @@ grep -Fq 'Re-establish a contained baseline immediately' "$ROOT/scripts/update.s
 grep -Fq 'LAUNCHAGENT_PID="$(wait_launchagent_running "$DOMAIN" "$SERVICE_LABEL")"' "$ROOT/scripts/update.sh"
 grep -Fq 'HTTP LaunchAgent owns the live menu runtime' "$ROOT/scripts/update.sh"
 
+# A stopped update transaction must use the atomic installer directly. The
+# zero-downtime deploy helper asserts live runtime PIDs remain unchanged and is
+# intentionally incompatible with fail-closed update shutdown.
+grep -Fq 'DARWINRELAY_INSTALL_APP=1 DARWINRELAY_APP_INSTALL_DIR="$APP_DIR" ./menubar/build.sh' "$ROOT/scripts/update.sh"
+if grep -Fq './scripts/deploy-menubar-update.sh' "$ROOT/scripts/update.sh"; then
+  echo "updater must not use zero-downtime deploy helper" >&2
+  exit 1
+fi
+
 python3 - "$ROOT/scripts/update.sh" <<'PY2'
 from pathlib import Path
 import sys

@@ -4,6 +4,7 @@ All notable public DarwinRelay changes will be documented here.
 
 ## Unreleased
 
+- Fixed the manual updater's app-install contract: once authority is stopped, updates now invoke the atomic menu-app installer directly instead of the zero-downtime deploy helper, whose live-PID stability invariant is intentionally incompatible with a fail-closed restart transaction. This also makes rollback bookkeeping reliable after a successful app swap.
 ## 0.6.7 — 2026-08-22
 
 - Fixed manual-updater restart ownership: after installing a target app the transaction re-runs the verified target kill-switch, terminates any standalone DarwinRelay menu instance that appeared during the install window, and requires the HTTP LaunchAgent to be `state=running` with a live DarwinRelay PID before health/doctor success. Rollback uses the same bounded menu-process reclamation.

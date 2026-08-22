@@ -336,7 +336,10 @@ fi
 # Only after authority is stopped do source and installed app move to the target.
 git checkout --detach "$TARGET_SHA"
 npm run check:integrity >/dev/null
-DARWINRELAY_APP_INSTALL_DIR="$APP_DIR" ./scripts/deploy-menubar-update.sh
+# The updater has already stopped DarwinRelay authority. Use the atomic installer
+# directly; the zero-downtime deploy helper intentionally requires live runtime
+# PIDs to remain stable and is the wrong contract for a stopped transaction.
+DARWINRELAY_INSTALL_APP=1 DARWINRELAY_APP_INSTALL_DIR="$APP_DIR" ./menubar/build.sh
 APP_SWAPPED=1
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" == "$TARGET_VERSION" ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_DIR/.DarwinRelay.app.rollback/Contents/Info.plist")" == "$OLD_VERSION" ]]
