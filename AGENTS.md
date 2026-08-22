@@ -160,6 +160,7 @@ The installer must not delete the dedicated Chrome profile during uninstall; pro
 - Build/install code must fail closed on unexpected designated-requirement changes unless an explicit signing-change override is supplied.
 - Do not commit Apple signing private material or Chrome extension private keys. Only the public Chrome manifest key belongs in Git.
 - Generated `.app` bundles are not source artifacts and must remain untracked.
+- GitHub Release notes must state the current source-first/self-build distribution model and make clear that the absence of prebuilt `.app`/`.dmg` assets is intentional unless the project explicitly changes distribution policy.
 
 Before a public release:
 
