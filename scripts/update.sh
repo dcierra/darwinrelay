@@ -170,11 +170,12 @@ fi
 ROOT="${DARWINRELAY_UPDATE_ROOT:?missing DARWINRELAY_UPDATE_ROOT}"
 SELF="$0"
 TARGET_DISABLE_SCRIPT=""
+TARGET_PROBE_DIR=""
 TARGET_PROBE_SCRIPT=""
 cleanup_update_helper() {
   rm -f "$SELF" 2>/dev/null || true
   [[ -z "$TARGET_DISABLE_SCRIPT" ]] || rm -f "$TARGET_DISABLE_SCRIPT" 2>/dev/null || true
-  [[ -z "$TARGET_PROBE_SCRIPT" ]] || rm -f "$TARGET_PROBE_SCRIPT" 2>/dev/null || true
+  [[ -z "$TARGET_PROBE_DIR" ]] || rm -rf "$TARGET_PROBE_DIR" 2>/dev/null || true
 }
 trap cleanup_update_helper EXIT
 
@@ -347,7 +348,8 @@ chmod 700 "$TARGET_DISABLE_SCRIPT"
 # is normally launched from Terminal/iTerm, whose TCC context is not the same as
 # the running DarwinRelay.app. Measuring ui_status through the live local MCP
 # runtime exercises the real responsible-process chain instead.
-TARGET_PROBE_SCRIPT="$(mktemp "${TMPDIR:-/tmp}/darwinrelay-probe-target.XXXXXX")"
+TARGET_PROBE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/darwinrelay-probe-target.XXXXXX")"
+TARGET_PROBE_SCRIPT="$TARGET_PROBE_DIR/probe-bridge-status.mjs"
 git show "${TARGET_SHA}:scripts/probe-bridge-status.mjs" > "$TARGET_PROBE_SCRIPT"
 TARGET_PROBE_EXPECTED="$(git show "${TARGET_SHA}:SHA256SUMS" | awk '$2 == "scripts/probe-bridge-status.mjs" {print $1; exit}')"
 TARGET_PROBE_ACTUAL="$(shasum -a 256 "$TARGET_PROBE_SCRIPT" | awk '{print $1}')"

@@ -110,6 +110,7 @@ grep -Fq 'Native desktop permissions preserved after update via live MCP runtime
 grep -Fq -- '--tool ui_status' "$ROOT/scripts/update.sh"
 grep -Fq 'record_candidate_failpoint after_validation' "$ROOT/scripts/update.sh"
 grep -Fq 'DARWINRELAY_UPDATE_CANDIDATE_MARKER_FILE' "$ROOT/scripts/update.sh"
+grep -Fq 'TARGET_PROBE_SCRIPT="$TARGET_PROBE_DIR/probe-bridge-status.mjs"' "$ROOT/scripts/update.sh"
 grep -Fq 'Candidate updater failed before the expected' "$ROOT/scripts/test-update-candidate.sh"
 grep -Fq 'EXPECTED_MARKER="$EXPECTED_POINT $CANDIDATE_SHA"' "$ROOT/scripts/test-update-candidate.sh"
 
