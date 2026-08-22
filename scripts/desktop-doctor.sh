@@ -13,6 +13,7 @@ fi
 TEMP_HELPER=""
 OPEN=0
 REQUEST=0
+OPEN_BIN="${DARWINRELAY_OPEN_BIN:-/usr/bin/open}"
 
 usage() {
   cat <<'TXT'
@@ -75,6 +76,24 @@ RC=$?
 set -e
 
 if (( OPEN )); then
-  open 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility' >/dev/null 2>&1 || true
+  # Route to the permission that is actually missing instead of always opening
+  # Accessibility. MacUIHelper's Post Events check uses CGRequestPostEventAccess,
+  # which shares the Accessibility remediation path; Screen Recording has its own
+  # Privacy & Security pane.
+  ANCHOR="$(node - "$RAW" <<'NODE'
+const raw = JSON.parse(process.argv[2]);
+const s = raw && raw.ok ? (raw.result || {}) : {};
+if (s.accessibilityTrusted !== true || s.postEventsGranted !== true) {
+  process.stdout.write("Privacy_Accessibility");
+} else if (s.screenRecordingGranted !== true) {
+  process.stdout.write("Privacy_ScreenCapture");
+} else {
+  process.stdout.write("Privacy_Accessibility");
+}
+NODE
+)"
+  if [[ -x "$OPEN_BIN" ]]; then
+    "$OPEN_BIN" "x-apple.systempreferences:com.apple.preference.security?$ANCHOR" >/dev/null 2>&1 || true
+  fi
 fi
 exit "$RC"

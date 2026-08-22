@@ -141,7 +141,7 @@ For consequential UI mutations, prefer `ui_action` plus a postcondition. `ui_seq
 - `ui_screenshot` — ScreenCaptureKit display/window/region image.
 - `ui_ocr` — Vision text recognition over display/window/region.
 - `ui_wait_visual` — wait for pixel change/stability.
-- `ui_cursor` — visual DarwinRelay AI cursor overlay; it does not move the physical mouse.
+- `ui_cursor` — visual DarwinRelay AI cursor overlay; it does not move the physical mouse. Prefer transient `move` (auto-hides by default); use persistent `show` only when the user needs the overlay to remain visible, then `hide` it explicitly.
 
 Raw input transport success is not proof the app consumed the event. Use semantic verification whenever the result matters.
 

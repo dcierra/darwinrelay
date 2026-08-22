@@ -55,13 +55,13 @@ clone → self-build → Start → connect ChatGPT → bridge_status → inspect
 
 The first shell/filesystem coding workflow must not require Chrome, Codex history, Accessibility, Screen Recording, or Input/Post Events permissions. Full Disk Access is capability-specific and should only be required when a task needs macOS-protected paths.
 
-Current product requirements:
+Completed foundation:
 
-- keep [docs/CHATGPT.md](docs/CHATGPT.md) as the canonical ChatGPT onboarding guide;
-- keep ChatGPT plan/workspace availability explicit instead of implying that every plan exposes write/modify MCP actions;
-- update menu-bar **Copy ChatGPT Setup** wording to the current ChatGPT **Apps** terminology and avoid stale `Plugins` labels;
-- make a read-only `bridge_status` + repository inspection the first verification step;
-- make the first real example a direct ChatGPT → local repo → test/fix/verify loop, with Codex continuity secondary.
+- [docs/CHATGPT.md](docs/CHATGPT.md) is the canonical ChatGPT onboarding guide;
+- ChatGPT plan/workspace availability is explicit instead of implying that every plan exposes write/modify MCP actions;
+- menu-bar **Copy ChatGPT Setup** uses the current ChatGPT **Apps** terminology rather than stale `Plugins` labels;
+- a read-only `bridge_status` + repository inspection is the first verification step;
+- the first real example is a direct ChatGPT → local repo → test/fix/verify loop, with Codex continuity secondary.
 
 ### Onboarding, permissions, and diagnostics
 
@@ -79,19 +79,22 @@ Codex continuity             READY | OPTIONAL / NOT CONFIGURED
 
 Core readiness should cover the pieces required to connect and execute a basic local developer workflow: source/runtime/app consistency, runtime package resolution, Node, the selected MCP transport, full-access latch state while running, local HTTP/OAuth health where applicable, and a real bridge/status smoke check.
 
-Planned work includes:
+Implemented foundation:
 
-- independent Accessibility, Screen Recording, Input/Post Events, and Full Disk Access diagnostics;
-- route each missing permission to the correct macOS Privacy & Security pane instead of always opening Accessibility;
-- do not report a healthy core shell/filesystem setup as globally degraded merely because an optional desktop/browser/Codex capability is not configured;
-- make each failed check name the component, why it matters, and the exact next action;
-- detect app/runtime version mismatch, missing source/runtime package, stale legacy processes, and invalid lifecycle state;
-- verify HTTP/OAuth metadata and public-origin consistency for the HTTP transport;
-- clearer dedicated-Chrome-profile, Native Messaging, extension, and workspace diagnostics;
-- one authoritative `doctor`/health path whose default verdict distinguishes blocking failures from optional capabilities;
+- independent Accessibility, Screen Recording/Input-Post-Events, and Full Disk Access presentation/remediation paths;
+- menu actions route missing Accessibility/Input, Screen Recording, and FDA state to the corresponding macOS Privacy & Security pane instead of always opening Accessibility;
+- menu health and `scripts/doctor.sh` distinguish blocking core readiness from optional desktop/FDA/Chrome/Codex capability state;
+- core failures name the failing component and a concrete next action;
+- doctor checks runtime package resolution, app/runtime version agreement, Node, selected transport, the full-access latch, HTTP token-file mode, and a real authenticated `initialize → bridge_status` smoke call;
+- doctor has deterministic regression coverage for ready, stopped-transport, app/runtime mismatch, HTTP bridge probing, and permission routing.
+
+Remaining work includes:
+
+- validate the full agent-assisted clean-install path through actual app installation and macOS consent handoff;
+- strengthen stale legacy-process and invalid lifecycle-state detection;
+- verify HTTP/OAuth public-origin/issuer consistency explicitly;
+- richer dedicated-Chrome-profile, Native Messaging, extension, and workspace remediation;
 - continued menu-bar UX refinement around version, core health, transport, permissions, and Safety mode.
-
-The current `scripts/doctor.sh` remains useful during this transition, but it is not yet the final first-run health gate.
 
 ## Next
 

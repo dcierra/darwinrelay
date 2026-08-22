@@ -147,7 +147,7 @@ ScreenCaptureKit handles display/window/region capture. Vision performs OCR. Vis
 
 ### Virtual cursor
 
-`MacUICursorOverlay` is a click-through visual overlay independent of the physical mouse. It can be rendered into screenshots for agent observability without moving the user's pointer.
+`MacUICursorOverlay` is a click-through visual overlay independent of the physical mouse. It can be rendered into screenshots for agent observability without moving the user's pointer. Ordinary cursor `move` requests carry a bounded auto-hide lifetime (2.5 seconds by default); only the explicit `show` action is persistent until `hide` or bridge teardown.
 
 ## Code signing and TCC
 

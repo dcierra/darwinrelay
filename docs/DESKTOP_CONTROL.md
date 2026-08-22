@@ -61,7 +61,7 @@ ui_screenshot / ui_ocr
 - `ui_ax_at` — `AXUIElementCopyElementAtPosition` hit-test that converts a visual coordinate into a stable fingerprinted ref.
 - `ui_screenshot` — ScreenCaptureKit display/window/region capture as native MCP image content.
 - `ui_observe` — status + AX tree + optional display/window/region screenshot.
-- `ui_cursor` — independent click-through AI cursor; it is visual state only and never moves the physical system cursor.
+- `ui_cursor` — independent click-through AI cursor; it is visual state only and never moves the physical system cursor. Normal `move` calls auto-hide after 2.5 seconds by default so the overlay cannot linger on the operator desktop; `show` is the explicit persistent mode and `hide` removes it immediately.
 - `ui_wait_for` — AXObserver-assisted bounded wait with polling fallback.
 - `ui_assert` — immediate semantic state assertion.
 - `ui_ocr` — Apple Vision OCR over a display/window/region, with text confidence and pixel bounds.

@@ -35,6 +35,11 @@ if [[ "$ACTUAL_VERSION" != "$EXPECTED_VERSION" ]]; then
   echo "installed app version mismatch: expected $EXPECTED_VERSION, got $ACTUAL_VERSION" >&2
   exit 1
 fi
+ACTUAL_PACKAGE_DIR="$(/usr/libexec/PlistBuddy -c 'Print :DarwinRelayPackageDirectory' "$TARGET/Contents/Info.plist")"
+if [[ "$ACTUAL_PACKAGE_DIR" != "$ROOT" ]]; then
+  echo "installed app source-package mismatch: expected $ROOT, got $ACTUAL_PACKAGE_DIR" >&2
+  exit 1
+fi
 
 # Hosted CI has only ad-hoc signing, so a rebuilt binary intentionally has a new
 # designated requirement. The override is test-local; production deploys refuse

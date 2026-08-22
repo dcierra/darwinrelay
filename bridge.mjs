@@ -52,6 +52,31 @@ const MAC_UI_CURSOR_HELPER = resolveMacUiCursor({ bridgeDir: BRIDGE_DIR });
 const MAC_UI_CURSOR_AVAILABLE = macUiCursorAvailable(MAC_UI_CURSOR_HELPER);
 const macUiCursor = new MacUiCursor(MAC_UI_CURSOR_HELPER);
 const virtualCursorState = { visible: false, x: null, y: null, displayId: null };
+const VIRTUAL_CURSOR_MOVE_AUTO_HIDE_MS = 2_500;
+let virtualCursorHideTimer = null;
+
+function cancelVirtualCursorAutoHide() {
+  if (!virtualCursorHideTimer) return;
+  clearTimeout(virtualCursorHideTimer);
+  virtualCursorHideTimer = null;
+}
+
+function hideVirtualCursor() {
+  cancelVirtualCursorAutoHide();
+  virtualCursorState.visible = false;
+  macUiCursor.send({ action: "hide" }, { start: false });
+}
+
+function scheduleVirtualCursorAutoHide(delayMs) {
+  cancelVirtualCursorAutoHide();
+  if (!Number.isInteger(delayMs) || delayMs <= 0) return;
+  virtualCursorHideTimer = setTimeout(() => {
+    virtualCursorHideTimer = null;
+    virtualCursorState.visible = false;
+    macUiCursor.send({ action: "hide" }, { start: false });
+  }, delayMs);
+  virtualCursorHideTimer.unref();
+}
 const ADVANCED_BROWSER = advancedBrowserConfig();
 
 // Interactive pty sessions. Every limit below is a bound on a publicly reachable
@@ -913,13 +938,14 @@ const TOOLS = [
   {
     name: "ui_cursor",
     title: "Control independent AI cursor",
-    description: "Move/show/hide the click-through DarwinRelay virtual cursor without moving the physical mouse. This cursor is visual only; ui_mouse performs actual input. Screenshot tools can render the same cursor position.",
+    description: "Move/show/hide the click-through DarwinRelay virtual cursor without moving the physical mouse. 'move' is transient and auto-hides after 2.5s by default; 'show' stays visible until hide/teardown. This cursor is visual only; ui_mouse performs actual input. Screenshot tools can render the same cursor position.",
     inputSchema: {
       type: "object",
       properties: {
         action: { type: "string", enum: ["status", "move", "show", "hide", "click"], default: "status" },
         x: { type: "number" }, y: { type: "number" }, display_id: { type: "integer", minimum: 0 },
         duration_ms: { type: "integer", minimum: 0, maximum: 10000, default: 160 },
+        auto_hide_ms: { type: "integer", minimum: 0, maximum: 60000, description: "For action=move only: hide the virtual cursor after this delay. Defaults to 2500; 0 keeps it visible until hide/teardown." },
       }, additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -3583,6 +3609,8 @@ function teardownAll(reason) {
     stderr(`in-flight teardown failed: ${error?.message || error}`);
   }
   try {
+    cancelVirtualCursorAutoHide();
+    virtualCursorState.visible = false;
     macUiCursor.stop();
   } catch (error) {
     stderr(`virtual cursor teardown failed: ${error?.message || error}`);
@@ -3879,10 +3907,13 @@ async function dispatchTool(name, args) {
         virtualCursorState.y = args.y;
         virtualCursorState.displayId = args?.display_id === undefined ? null : requireInteger(args, "display_id", 0, 0xffffffff);
         virtualCursorState.visible = true;
+        cancelVirtualCursorAutoHide();
         macUiCursor.send({ action, x: args.x, y: args.y, ...(virtualCursorState.displayId === null ? {} : { display_id: virtualCursorState.displayId }), duration_ms: optionalInteger(args, "duration_ms", 160, 0, 10_000) });
+        if (action === "move") {
+          scheduleVirtualCursorAutoHide(optionalInteger(args, "auto_hide_ms", VIRTUAL_CURSOR_MOVE_AUTO_HIDE_MS, 0, 60_000));
+        }
       } else if (action === "hide") {
-        virtualCursorState.visible = false;
-        macUiCursor.send({ action: "hide" }, { start: false });
+        hideVirtualCursor();
       } else if (action === "click") {
         if (!virtualCursorState.visible) throw new Error("ui_cursor click requires a visible virtual cursor; move/show it first");
         macUiCursor.send({ action: "click" });
