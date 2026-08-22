@@ -94,6 +94,16 @@ grep -Fq 'Background Chrome            OPTIONAL / NOT CONFIGURED' "$READY_OUT"
 grep -Fq 'Codex continuity             OPTIONAL / NOT CONFIGURED' "$READY_OUT"
 grep -Fq 'Real MCP initialize + bridge_status smoke passed' "$READY_OUT"
 
+# A connected unpacked extension from the previous release is not fully READY.
+cat > "$TMP/probe.mjs" <<JS
+console.log(JSON.stringify({bridgeVersion:"$VERSION",backgroundChrome:{extensionReady:true,extension:{version:"0.0.0"},profileBinding:{profileName:"DarwinRelay"}}}));
+JS
+CHROME_MISMATCH_OUT="$TMP/chrome-mismatch.out"
+run_doctor "$TMP/curl-ok" "$CHROME_MISMATCH_OUT"
+grep -Fq 'CORE VERDICT: READY' "$CHROME_MISMATCH_OUT"
+grep -Fq 'Background Chrome            OPTIONAL / ACTION REQUIRED' "$CHROME_MISMATCH_OUT"
+grep -Fq "extension v0.0.0 is connected but runtime is v$VERSION" "$CHROME_MISMATCH_OUT"
+
 STOPPED_OUT="$TMP/stopped.out"
 if run_doctor "$TMP/curl-fail" "$STOPPED_OUT"; then
   printf 'doctor unexpectedly reported READY with the HTTP front end stopped\n' >&2
