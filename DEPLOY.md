@@ -1,94 +1,109 @@
-# Deployment checklist
+# Transport setup
 
-This checklist gets the bridge from the downloaded archive to a callable ChatGPT toolset.
-Option A exposes no inbound port. Option B publishes an HTTPS endpoint through
-Cloudflare Tunnel; read `SECURITY.md` before choosing it.
+DarwinRelay's canonical installation model is **source-first / self-build**. Build the menu app first as described in [README.md](README.md). For the normal ChatGPT onboarding path, follow [docs/CHATGPT.md](docs/CHATGPT.md).
 
-Pick a transport first. **Option A** requires the Tunnel connection type, which
-personal ChatGPT accounts cannot select. If the Tunnel toggle in ChatGPT's
-plugin dialog is greyed out, skip to Option B.
+This document is the advanced transport reference. It deliberately separates **install/build** from **how an MCP client reaches the runtime**:
 
-## Option B — Cloudflare Tunnel + Server URL (personal accounts)
+- **Option B — HTTPS Server URL through Cloudflare Tunnel**: publishes the loopback HTTP/OAuth front end at a public HTTPS origin.
+- **Option A — OpenAI Secure MCP Tunnel**: uses the OpenAI tunnel client for supported workspaces without publishing an inbound public endpoint.
+
+ChatGPT plan/workspace availability is controlled by OpenAI and can change. Check the current OpenAI MCP/developer-mode documentation before choosing a path. `install.sh` is **Option A-specific**; it is not DarwinRelay's universal installer.
+
+Read [SECURITY.md](SECURITY.md) before exposing either transport. A credential accepted by the transport ultimately gates local execution with the authority of the macOS user running DarwinRelay.
+
+## Option B — Cloudflare Tunnel + HTTPS Server URL
+
+The menu app owns this path for normal use. The commands below are the manual equivalent and are useful for diagnosis or headless testing.
+
+Run them from the DarwinRelay source checkout:
 
 ```bash
-cd ~/Downloads/darwinrelay
+cd /path/to/darwinrelay
 
-# 1. Unlock and generate the bearer token.
-mkdir -p "$HOME/Library/Application Support/DarwinRelay"
-printf 'I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS\n' \
-  > "$HOME/Library/Application Support/DarwinRelay/FULL_ACCESS_ENABLED"
-chmod 600 "$HOME/Library/Application Support/DarwinRelay/FULL_ACCESS_ENABLED"
-export DARWINRELAY_HTTP_TOKEN="$(openssl rand -hex 32)"
-printf 'token: %s\n' "$DARWINRELAY_HTTP_TOKEN"
+# 1. Unlock and create a mode-0600 bearer-token file.
+DATA_DIR="$HOME/Library/Application Support/DarwinRelay"
+mkdir -p "$DATA_DIR"
+printf 'I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS\n' > "$DATA_DIR/FULL_ACCESS_ENABLED"
+chmod 600 "$DATA_DIR/FULL_ACCESS_ENABLED"
+export DARWINRELAY_HTTP_TOKEN_FILE="$DATA_DIR/http-token"
+if [[ ! -s "$DARWINRELAY_HTTP_TOKEN_FILE" ]]; then
+  openssl rand -hex 32 > "$DARWINRELAY_HTTP_TOKEN_FILE"
+fi
+chmod 600 "$DARWINRELAY_HTTP_TOKEN_FILE"
 
 # 2. Start the HTTP front end, capturing logs where doctor.sh looks for them.
-#    Without the redirect its 401s, respawns, and errors are lost on scroll.
 LOG_DIR="$HOME/Library/Logs/DarwinRelay"
 mkdir -p "$LOG_DIR"
 node mcp-http.mjs >>"$LOG_DIR/http.stdout.log" 2>>"$LOG_DIR/http.stderr.log" &
 
-# 3. Confirm it is up before publishing it. Retry: node needs a moment to bind,
-#    and this is the only gate before step 4 exposes the machine.
+# 3. Confirm it is up before publishing it.
 for _ in $(seq 20); do curl -fsS http://127.0.0.1:8787/healthz && break; sleep 0.25; done
 
 # 4. Publish it.
 cloudflared tunnel --url http://127.0.0.1:8787
 ```
 
-Then connect ChatGPT with **OAuth** — its dialog has no API-key field, so the bearer
-token is the *consent* credential rather than the transport credential:
+Then create the DarwinRelay custom MCP app in ChatGPT using the current **Apps** / developer-mode flow. See [docs/CHATGPT.md](docs/CHATGPT.md) for current plan/UI caveats.
 
-| Field | Value |
+When the corresponding OAuth fields are present, the HTTP transport uses:
+
+| Setting | Value |
 |---|---|
-| Connection | Server URL |
-| Server URL | `https://<hostname>/mcp` |
+| Endpoint / Server URL | `https://<hostname>/mcp` |
 | Authentication | OAuth |
-| Registration method | User-Defined OAuth Client |
+| Registration method | User-defined OAuth client |
 | OAuth Client ID | the `client_id` logged at startup |
 | OAuth Client Secret | leave blank |
 | Token endpoint auth method | `none` |
-| Default scopes | `mcp` |
-| OIDC enabled | **untick** |
+| Scope | `mcp` |
+| OIDC | off / disabled |
 
-ChatGPT opens a consent page served by your own machine; paste the bridge token to
-approve. Prefer a **named** tunnel over the quick tunnel in step 4 — see the note
-under §7 for why a rotating hostname breaks the connector.
+ChatGPT opens a consent page served by your own machine; paste the token stored in `~/Library/Application Support/DarwinRelay/http-token` to approve. The token is the operator-consent credential and must remain private.
 
-`cloudflared tunnel --url` runs in the foreground and prints the assigned
-`https://...trycloudflare.com` hostname to stderr; that is the `<hostname>` above.
+`cloudflared tunnel --url` runs in the foreground and prints the assigned `https://...trycloudflare.com` hostname to stderr; that is the `<hostname>` above.
 
-Note `/healthz` answers before `bridge.mjs` is ever spawned, so a green step 3
-does not prove the unlock file is correct. Confirm with a real call after
-connecting the plugin.
+`/healthz` answers before `bridge.mjs` is ever spawned, so a green HTTP health check does not prove the full-access latch or bridge process is correct. Confirm with a real `bridge_status` call after connecting the client.
 
-Verify with `scripts/doctor.sh`, which reports the HTTP front end's state and the
-Full Disk Access check. For persistence, build/install the menu app and install
-its per-user LaunchAgent:
+Verify local state with:
+
+```bash
+./scripts/doctor.sh
+```
+
+For persistence, build/install the menu app and install its per-user LaunchAgent:
 
 ```bash
 ./menubar/build.sh
 ./scripts/install-http-autostart.sh
 ```
 
-If the menu app is already running, the installer writes the LaunchAgent for the
-next login without loading a duplicate instance. Once launchd owns it, it starts
-at login and restarts after abnormal exits; normal Quit is not immediately
-respawned. The menu app continues to supervise `mcp-http.mjs` and `cloudflared` as
-a pair.
+If the menu app is already running, the installer writes the LaunchAgent for the next login without loading a duplicate instance. Once launchd owns it, it starts at login and restarts after abnormal exits; normal Quit is not immediately respawned. The menu app continues to supervise `mcp-http.mjs` and `cloudflared` as a pair.
 
-To stop everything, from this directory:
+To stop everything, from the source checkout:
 
 ```bash
 pkill -f 'cloudflared tunnel'   # first: disable.sh flags a live cloudflared
-./scripts/disable.sh            # read the output; non-zero means NOT contained
+./scripts/disable.sh            # non-zero means containment was not proven
 ```
 
-Stop `cloudflared` **first**. `disable.sh` treats any running `cloudflared` as
-not-contained, so running it before the `pkill` reports "NOT contained" and exits 1
-every time on a perfectly contained host — which teaches you to ignore the one signal
-you are told to read.
+Stop `cloudflared` **first**. `disable.sh` treats any running `cloudflared` as not-contained, so running it before the `pkill` reports a failure even when the DarwinRelay-owned processes were otherwise reclaimed.
 
-## Option A — OpenAI Secure MCP Tunnel (workspace accounts)
+### Use a named tunnel for repeated use
+
+A quick tunnel mints a new random hostname per run, and that hostname is also the OAuth issuer. A restart therefore changes the identity ChatGPT recorded and requires recreating the custom app.
+
+Use a **named** tunnel for anything beyond a one-off:
+
+```bash
+cloudflared tunnel create <name>
+cloudflared tunnel route dns <name> <hostname>
+```
+
+Then configure an ingress in `~/.cloudflared/config.yml` pointing at `http://localhost:8787`. The menu app reads that file and prefers the named tunnel automatically.
+
+## Option A — OpenAI Secure MCP Tunnel
+
+Use this path only when the target OpenAI workspace supports Secure MCP Tunnel and you intentionally want that transport. `install.sh` belongs to this path.
 
 ### 1. Create the OpenAI tunnel resources
 
@@ -110,11 +125,11 @@ chmod 700 "$HOME/.local/bin/tunnel-client"
 
 Use the actual downloaded filename if the release archive names it differently.
 
-### 2. Install the bridge
+### 2. Install the Tunnel transport runtime
+
+Run from your DarwinRelay source checkout:
 
 ```bash
-cd ~/Downloads/darwinrelay
-
 export DARWINRELAY_FULL_ACCESS_ACK='I_UNDERSTAND_THIS_GRANTS_FULL_ACCESS'
 export CONTROL_PLANE_TUNNEL_ID='tunnel_0123456789abcdef0123456789abcdef'
 read -r -s -p 'Tunnel runtime API key: ' CONTROL_PLANE_API_KEY; printf '\n'
@@ -131,79 +146,55 @@ The installer must finish with successful bridge tests, successful `tunnel-clien
 
 ```bash
 "$HOME/.local/share/darwinrelay/scripts/doctor.sh"
-open http://127.0.0.1:8080/ui
 ```
 
-Do not continue until `/readyz` is healthy. If the tunnel is newly created, allow for control-plane propagation and rerun diagnostics.
+Do not continue until the Tunnel transport's readiness check is healthy. If the tunnel is newly created, allow for control-plane propagation and rerun diagnostics.
 
 ### 4. Connect ChatGPT
 
-1. Open ChatGPT Settings → Security and login and enable Developer mode.
-2. Open Plugins and create a developer-mode app.
-3. Select Connection: Tunnel.
-4. Select or paste the tunnel ID.
-5. Save the app and add it to a new Chat conversation.
+Use the current ChatGPT **Apps** / developer-mode creation flow documented by OpenAI. Select Secure MCP Tunnel when that connection type is available for the workspace, select or paste the tunnel ID, scan the tools, and create the app.
 
-Availability and permission UI can vary by account rollout and workspace policy. The local bridge cannot override a missing Developer mode or Tunnel option.
+Availability and permission UI can vary by plan, workspace role, rollout, and policy. The local bridge cannot override a missing Developer mode or Tunnel option.
 
 ### 5. Test without mutating anything
 
 Ask ChatGPT:
 
 ```text
-Use DarwinRelay. Call bridge_status, then fs_stat for ~/.codex. Do not call any write tool or shell command yet.
+Use DarwinRelay. Call bridge_status first.
+Then list the target repository and read its top-level README/package metadata.
+Do not modify files or run shell commands yet.
 ```
 
-Confirm the expected Mac username, home directory, Node path, shell, audit mode, and `fullAccessUnlocked: true`.
+Confirm the expected Mac, runtime version, home directory, Node path, shell, audit mode, and `fullAccessUnlocked: true`.
 
-### 6. Recover the target Codex session
+### 6. Optional: recover a persisted Codex session
+
+Codex continuity is not required for DarwinRelay. If you want it:
 
 ```text
 Use only DarwinRelay.
 Read one of your own persisted Codex thread IDs without resuming it.
-If the complete history does not fit, page codex_thread_turns_list oldest-first with items_view full until nextCursor is null.
-Summarize the objective, repository, branch, decisions, changed files, commands, current errors, and exact next step.
+If the complete history does not fit, page codex_thread_turns_list oldest-first
+with items_view full until nextCursor is null.
+Summarize the objective, repository, branch, decisions, changed files, commands,
+current errors, and exact next step.
 Then inspect the live repository state and continue from the unfinished step.
 Do not invoke a Codex model or OpenAI API from shell.
 ```
 
-### 7. Emergency disable
+## Emergency disable
 
 ```bash
-# Tunnel transport (install.sh has run):
+# Secure Tunnel transport (install.sh has run):
 "$HOME/.local/share/darwinrelay/scripts/disable.sh"
 
-# HTTP transport — run from the package; this also boots out HTTP autostart if loaded:
+# HTTP transport — run from the source package; this also boots out HTTP autostart if loaded:
 ./scripts/disable.sh
 ```
 
-Also disable or remove the developer-mode app in ChatGPT when you want the remote side disconnected.
+Also disable/remove the DarwinRelay app in the remote MCP client when you want the remote side disconnected.
 
-**A rotating hostname breaks the connector.** `cloudflared tunnel --url` mints a new
-random hostname per run, and that hostname *is* the OAuth issuer — so a restart
-between discovery and callback makes the issuer stop matching what ChatGPT recorded,
-and a strict client drops the callback silently. Use a **named** tunnel for anything
-beyond a one-off: `cloudflared tunnel create <name>`, `cloudflared tunnel route dns
-<name> <hostname>`, then an ingress in `~/.cloudflared/config.yml` pointing at
-`http://localhost:8787`. The menu bar app reads that file and prefers the named
-tunnel automatically.
+**Removing the unlock file is fail-closed.** `bridge.mjs` re-reads it before every tool call and exits 78 when it is gone, so removing it refuses the next call. In-flight `shell_exec` work is killed rather than left running, while detached `shell_start` jobs are reclaimed by `disable.sh`.
 
-**Removing the unlock file is fail-closed.** `bridge.mjs` re-reads it before every
-tool call and exits 78 when it is gone, so `rm` alone refuses the next call. An
-in-flight `shell_exec` is killed rather than left running, and detached
-`shell_start` jobs still outlive the bridge until `disable.sh` reclaims them.
-
-`disable.sh` first boots out either DarwinRelay LaunchAgent (Secure Tunnel or
-HTTP/Cloudflare autostart), then stops the front end (by pidfile), any `bridge.mjs`
-processes, and detached job process groups. It escalates to `SIGKILL`, re-verifies
-the same targets, and exits non-zero if any survive — or if the unlock file could
-not be removed, or `launchctl` could not be queried. It does not kill an unrelated
-or already-detached `cloudflared`; if it warns that one is still running, the
-hostname may still resolve:
-
-```bash
-pkill -f 'cloudflared tunnel'
-```
-
-The most reliable remote cutoff is deleting the plugin in ChatGPT, which revokes
-the connection regardless of local state.
+`disable.sh` boots out DarwinRelay LaunchAgents, stops the front end, bridge processes, and detached job process groups, escalates when necessary, and re-verifies containment. It exits non-zero when containment cannot be proven. It does not kill an unrelated `cloudflared`; if it warns that one is still running, stop that process separately.
