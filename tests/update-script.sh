@@ -89,6 +89,16 @@ grep -Fq 'Re-establish a contained baseline immediately' "$ROOT/scripts/update.s
 grep -Fq 'LAUNCHAGENT_PID="$(wait_launchagent_running "$DOMAIN" "$SERVICE_LABEL")"' "$ROOT/scripts/update.sh"
 grep -Fq 'HTTP LaunchAgent owns the live menu runtime' "$ROOT/scripts/update.sh"
 
+# Update deployment runs only after authority is stopped, so it must not apply
+# the separate zero-downtime PID-preservation contract. Rollback must inspect
+# real app versions rather than rely on a flag set after deploy returns success.
+grep -Fq 'DARWINRELAY_DEPLOY_VERIFY_RUNTIME_PIDS=0' "$ROOT/scripts/update.sh"
+grep -Fq 'restore_old_app' "$ROOT/scripts/update.sh"
+if grep -Fq 'APP_SWAPPED' "$ROOT/scripts/update.sh"; then
+  echo "updater still relies on post-success APP_SWAPPED state" >&2
+  exit 1
+fi
+
 python3 - "$ROOT/scripts/update.sh" <<'PY2'
 from pathlib import Path
 import sys
@@ -99,6 +109,12 @@ stop=s.index('stop_all_menu_instances', second_disable)
 bootstrap=s.index('launchctl bootstrap "$DOMAIN" "$SERVICE_PLIST"', stop)
 owned=s.index('LAUNCHAGENT_PID="$(wait_launchagent_running', bootstrap)
 assert second_disable < stop < bootstrap < owned
+rollback=s.index('rollback_update()')
+old_checkout=s.index('git checkout --detach "$OLD_SHA"', rollback)
+restore=s.index('restore_old_app', old_checkout)
+assert old_checkout < restore
+assert 'DARWINRELAY_DEPLOY_VERIFY_RUNTIME_PIDS=0' in s
+assert 'APP_SWAPPED' not in s
 PY2
 
 echo "manual updater test passed"

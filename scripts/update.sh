@@ -283,7 +283,6 @@ DOMAIN="gui/$(id -u)"
 SERVICE_LABEL="io.github.dcierra.darwinrelay.http"
 SERVICE_PLIST="$HOME/Library/LaunchAgents/$SERVICE_LABEL.plist"
 OLD_MENU_PID="$(darwinrelay_menu_pids | /usr/bin/awk 'NR==1{print; exit}')"
-APP_SWAPPED=0
 ROLLING_BACK=0
 
 wait_health() {
@@ -294,6 +293,28 @@ wait_health() {
     attempts=$((attempts - 1))
   done
   return 1
+}
+
+app_bundle_version() { # app bundle path
+  /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$1/Contents/Info.plist" 2>/dev/null || true
+}
+
+restore_old_app() {
+  local current rollback
+  current="$(app_bundle_version "$APP")"
+  [[ "$current" == "$OLD_VERSION" ]] && return 0
+
+  rollback="$(app_bundle_version "$APP_DIR/.DarwinRelay.app.rollback")"
+  if [[ "$rollback" == "$OLD_VERSION" ]]; then
+    printf 'Restoring rollback app v%s.\n' "$OLD_VERSION" >&2
+    DARWINRELAY_APP_INSTALL_DIR="$APP_DIR" "$ROOT/scripts/rollback-menubar-update.sh" || return 1
+  else
+    printf 'No matching rollback app; rebuilding v%s from restored source.\n' "$OLD_VERSION" >&2
+    DARWINRELAY_INSTALL_APP=1 DARWINRELAY_APP_INSTALL_DIR="$APP_DIR" "$ROOT/menubar/build.sh" >/dev/null || return 1
+  fi
+
+  [[ "$(app_bundle_version "$APP")" == "$OLD_VERSION" ]]
+  codesign --verify --deep --strict "$APP" >/dev/null 2>&1
 }
 
 rollback_update() {
@@ -309,15 +330,18 @@ rollback_update() {
   launchctl bootout "$DOMAIN/$SERVICE_LABEL" >/dev/null 2>&1 || true
   stop_all_menu_instances || true
 
-  if (( APP_SWAPPED == 1 )) && [[ -d "$APP_DIR/.DarwinRelay.app.rollback" ]]; then
-    DARWINRELAY_APP_INSTALL_DIR="$APP_DIR" "$ROOT/scripts/rollback-menubar-update.sh" || true
-  fi
-
+  # Restore source first, then restore/rebuild the matching app. Do not depend on
+  # a flag set after deploy success: a deploy can install the new bundle and fail
+  # in a later verification step.
   git checkout --detach "$OLD_SHA" >/dev/null 2>&1 || true
+  restore_old_app || true
+
   if [[ -x "$ROOT/scripts/install-http-autostart.sh" && -x "$APP/Contents/MacOS/DarwinRelay" ]]; then
     DARWINRELAY_APP_PATH="$APP" DARWINRELAY_HTTP_AUTOSTART_LOAD_NOW=0 "$ROOT/scripts/install-http-autostart.sh" >/dev/null 2>&1 || true
     launchctl bootout "$DOMAIN/$SERVICE_LABEL" >/dev/null 2>&1 || true
+    launchctl enable "$DOMAIN/$SERVICE_LABEL" >/dev/null 2>&1 || true
     launchctl bootstrap "$DOMAIN" "$SERVICE_PLIST" >/dev/null 2>&1 || true
+    wait_launchagent_running "$DOMAIN" "$SERVICE_LABEL" >/dev/null 2>&1 || true
     wait_health || true
   fi
   echo "Rollback attempt complete. Run ./scripts/doctor.sh before retrying the update." >&2
@@ -336,8 +360,7 @@ fi
 # Only after authority is stopped do source and installed app move to the target.
 git checkout --detach "$TARGET_SHA"
 npm run check:integrity >/dev/null
-DARWINRELAY_APP_INSTALL_DIR="$APP_DIR" ./scripts/deploy-menubar-update.sh
-APP_SWAPPED=1
+DARWINRELAY_DEPLOY_VERIFY_RUNTIME_PIDS=0 DARWINRELAY_APP_INSTALL_DIR="$APP_DIR" ./scripts/deploy-menubar-update.sh
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" == "$TARGET_VERSION" ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_DIR/.DarwinRelay.app.rollback/Contents/Info.plist")" == "$OLD_VERSION" ]]
 
