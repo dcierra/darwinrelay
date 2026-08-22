@@ -19,6 +19,37 @@ if is_canonical_origin /tmp/darwinrelay; then exit 1; fi
 if is_release_tag v0.6.4-beta.1; then exit 1; fi
 if is_release_tag latest; then exit 1; fi
 
+# The transaction lock is a real advisory lock held on fd 9, so simultaneous
+# menu/Terminal launches fail immediately without stale-lock cleanup races.
+cat > "$TMP/lock-holder.sh" <<EOF_LOCK
+#!/bin/bash
+set -euo pipefail
+DARWINRELAY_UPDATE_LIBRARY_ONLY=1 source "$ROOT/scripts/update.sh"
+export DARWINRELAY_DATA_DIR="$TMP/lock-data"
+acquire_update_lock
+printf acquired > "$TMP/lock-acquired"
+sleep 2
+EOF_LOCK
+cat > "$TMP/lock-contender.sh" <<EOF_LOCK
+#!/bin/bash
+set -euo pipefail
+DARWINRELAY_UPDATE_LIBRARY_ONLY=1 source "$ROOT/scripts/update.sh"
+export DARWINRELAY_DATA_DIR="$TMP/lock-data"
+acquire_update_lock
+EOF_LOCK
+chmod +x "$TMP/lock-holder.sh" "$TMP/lock-contender.sh"
+"$TMP/lock-holder.sh" &
+LOCK_HOLDER=$!
+for _ in {1..50}; do [[ -f "$TMP/lock-acquired" ]] && break; sleep 0.02; done
+[[ -f "$TMP/lock-acquired" ]]
+set +e
+"$TMP/lock-contender.sh"
+LOCK_RC=$?
+set -e
+[[ "$LOCK_RC" == 75 ]]
+wait "$LOCK_HOLDER"
+"$TMP/lock-contender.sh"
+
 mkdir -p "$TMP/work"
 git -C "$TMP/work" init -q
 git -C "$TMP/work" config user.email test@example.invalid
@@ -85,6 +116,38 @@ chmod +x "$TMP/launchctl"
 LAUNCHCTL_BIN="$TMP/launchctl"
 [[ "$(launchagent_running_pid gui/501 io.github.dcierra.darwinrelay.http)" == "101" ]]
 
+# Native desktop readiness is measured through the authenticated live MCP probe,
+# never by launching MacUIHelper directly from the updater's Terminal/iTerm TCC context.
+ui_status_json_ready '{"accessibilityTrusted":true,"screenRecordingGranted":true,"postEventsGranted":true}'
+if ui_status_json_ready '{"accessibilityTrusted":true,"screenRecordingGranted":false,"postEventsGranted":true}'; then
+  echo "ui_status readiness accepted a missing permission" >&2
+  exit 1
+fi
+cat > "$TMP/ui-probe.mjs" <<'JS'
+const f = process.env.DR_TEST_COUNT_FILE;
+const fs = await import('node:fs');
+let n = 0;
+try { n = Number(fs.readFileSync(f, 'utf8')) || 0; } catch {}
+n += 1;
+fs.writeFileSync(f, String(n));
+const ready = n >= 3;
+process.stdout.write(JSON.stringify({accessibilityTrusted:ready,screenRecordingGranted:ready,postEventsGranted:ready})+'\n');
+JS
+: > "$TMP/token"
+DR_TEST_COUNT_FILE="$TMP/ui-count" wait_runtime_ui_status_ready "$TMP/ui-probe.mjs" "$TMP/token" 8787 5 0.01
+[[ "$(cat "$TMP/ui-count")" == 3 ]]
+grep -Fq 'Native desktop baseline: READY via live MCP runtime.' "$ROOT/scripts/update.sh"
+grep -Fq 'Native desktop permissions preserved after update via live MCP runtime.' "$ROOT/scripts/update.sh"
+grep -Fq -- '--tool ui_status' "$ROOT/scripts/update.sh"
+grep -Fq 'record_candidate_failpoint after_validation' "$ROOT/scripts/update.sh"
+grep -Fq "trap 'rollback_update 129' HUP" "$ROOT/scripts/update.sh"
+grep -Fq 'Another DarwinRelay update transaction is already running.' "$ROOT/scripts/update.sh"
+grep -Fq '/usr/bin/lockf -s -t 0 9' "$ROOT/scripts/update.sh"
+grep -Fq 'DARWINRELAY_UPDATE_CANDIDATE_MARKER_FILE' "$ROOT/scripts/update.sh"
+grep -Fq 'TARGET_PROBE_SCRIPT="$TARGET_PROBE_DIR/probe-bridge-status.mjs"' "$ROOT/scripts/update.sh"
+grep -Fq 'Candidate updater failed before the expected' "$ROOT/scripts/test-update-candidate.sh"
+grep -Fq 'EXPECTED_MARKER="$EXPECTED_POINT $CANDIDATE_SHA"' "$ROOT/scripts/test-update-candidate.sh"
+
 grep -Fq 'Re-establish a contained baseline immediately' "$ROOT/scripts/update.sh"
 grep -Fq 'LAUNCHAGENT_PID="$(wait_launchagent_running "$DOMAIN" "$SERVICE_LABEL")"' "$ROOT/scripts/update.sh"
 grep -Fq 'HTTP LaunchAgent owns the live menu runtime' "$ROOT/scripts/update.sh"
@@ -116,5 +179,24 @@ assert old_checkout < restore
 assert 'DARWINRELAY_DEPLOY_VERIFY_RUNTIME_PIDS=0' in s
 assert 'APP_SWAPPED' not in s
 PY2
+
+
+# Public updater stays release-only. Unpublished SHA testing is reachable only
+# through the explicit maintainer acknowledgement and separate harness.
+grep -Fq 'DARWINRELAY_UPDATE_CANDIDATE_SHA' "$ROOT/scripts/update.sh"
+grep -Fq 'I_UNDERSTAND_THIS_INSTALLS_UNPUBLISHED_DARWINRELAY_CODE' "$ROOT/scripts/update.sh"
+grep -Fq 'after_app_install|after_validation' "$ROOT/scripts/update.sh"
+grep -Fq 'scripts/test-update-candidate.sh' "$ROOT/AGENTS.md"
+if grep -Fq -- '--candidate' "$ROOT/scripts/update.sh"; then
+  echo "public updater unexpectedly exposes arbitrary candidate CLI" >&2
+  exit 1
+fi
+grep -Fq 'Candidate worktree must be clean and committed.' "$ROOT/scripts/test-update-candidate.sh"
+grep -Fq 'Candidate and installed checkout must share the same canonical Git object store.' "$ROOT/scripts/test-update-candidate.sh"
+grep -Fq 'Candidate full round-trip passed' "$ROOT/scripts/test-update-candidate.sh"
+grep -Fq 'Candidate rollback check passed' "$ROOT/scripts/test-update-candidate.sh"
+grep -Fq 'competing DarwinRelay launchd labels exist' "$ROOT/scripts/test-update-candidate.sh"
+grep -Fq 'menu ownership does not match the canonical LaunchAgent' "$ROOT/scripts/test-update-candidate.sh"
+grep -Fq 'Candidate environment preflight passed' "$ROOT/scripts/test-update-candidate.sh"
 
 echo "manual updater test passed"

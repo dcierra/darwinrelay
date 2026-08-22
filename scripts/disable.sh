@@ -37,6 +37,12 @@ BACKGROUND_CHROME_GRANT_DIR="$DATA_DIR/chrome-background-grants"
 LAUNCHCTL_BIN="${LAUNCHCTL_BIN:-$(command -v launchctl 2>/dev/null || true)}"
 HTTP_PORT="${DARWINRELAY_HTTP_PORT:-8787}"
 INSTALL_DIR="${DARWINRELAY_INSTALL_DIR:-$(cd "$(dirname "$0")/.." && pwd -P)}"
+LAUNCHAGENT_STOP_ATTEMPTS="${DARWINRELAY_LAUNCHAGENT_STOP_ATTEMPTS:-50}"
+if ! [[ "$LAUNCHAGENT_STOP_ATTEMPTS" =~ ^[0-9]+$ ]] || (( LAUNCHAGENT_STOP_ATTEMPTS < 1 || LAUNCHAGENT_STOP_ATTEMPTS > 600 )); then
+  printf 'DARWINRELAY_LAUNCHAGENT_STOP_ATTEMPTS must be an integer from 1 to 600.\n' >&2
+  exit 64
+fi
+
 
 did_something=0
 still_running=0
@@ -266,20 +272,49 @@ if [[ -d "$BACKGROUND_CHROME_GRANT_DIR" ]]; then
 fi
 
 # --- LaunchAgents -----------------------------------------------------------
+# `launchctl bootout` is asynchronous on a busy Aqua session. A successful
+# return does not mean the job is already absent; killing its children too soon
+# lets launchd respawn them and defeats containment. Disable the service first,
+# then poll until `print` proves it is gone.
+wait_launchagent_absent() { # label
+  local label="$1" attempts="$LAUNCHAGENT_STOP_ATTEMPTS" out rc
+  while (( attempts > 0 )); do
+    out="$("$LAUNCHCTL_BIN" print "$DOMAIN/$label" 2>&1)"
+    rc=$?
+    if (( rc != 0 )); then
+      if [[ "$out" == *"Could not find service"* || "$out" == *"not find"* ]]; then
+        return 0
+      fi
+      printf 'Could not verify LaunchAgent %s disappeared from %s: %s\n' "$label" "$DOMAIN" "$out" >&2
+      return 2
+    fi
+    sleep 0.1
+    attempts=$((attempts - 1))
+  done
+  return 1
+}
+
 if [[ -n "$LAUNCHCTL_BIN" && -x "$LAUNCHCTL_BIN" ]]; then
   for launch_label in "$LABEL" "$HTTP_LABEL"; do
     launchctl_out="$("$LAUNCHCTL_BIN" print "$DOMAIN/$launch_label" 2>&1)"
     launchctl_rc=$?
     if (( launchctl_rc == 0 )); then
-      if "$LAUNCHCTL_BIN" bootout "$DOMAIN/$launch_label" >/dev/null 2>&1; then
-        printf 'Stopped LaunchAgent: %s\n' "$launch_label"
-      else
+      did_something=1
+      # Persistently disable before bootout so KeepAlive cannot win the race.
+      if ! "$LAUNCHCTL_BIN" disable "$DOMAIN/$launch_label" >/dev/null 2>&1; then
+        printf 'FAILED to disable LaunchAgent %s before bootout.\n' "$launch_label"
+        still_running=1
+        continue
+      fi
+      if ! "$LAUNCHCTL_BIN" bootout "$DOMAIN/$launch_label" >/dev/null 2>&1; then
         printf 'FAILED to boot out LaunchAgent %s\n' "$launch_label"
         still_running=1
+        continue
       fi
-      did_something=1
-      if "$LAUNCHCTL_BIN" print "$DOMAIN/$launch_label" >/dev/null 2>&1; then
-        printf 'WARNING: LaunchAgent %s is STILL loaded; launchd may relaunch it.\n' "$launch_label"
+      if wait_launchagent_absent "$launch_label"; then
+        printf 'Stopped and disabled LaunchAgent: %s\n' "$launch_label"
+      else
+        printf 'WARNING: LaunchAgent %s is STILL loaded after bootout; refusing to claim containment.\n' "$launch_label"
         still_running=1
       fi
     elif [[ "$launchctl_out" == *"Could not find service"* || "$launchctl_out" == *"not find"* ]]; then

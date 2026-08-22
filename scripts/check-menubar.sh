@@ -16,7 +16,8 @@ for script in \
   "$ROOT/scripts/deploy-menubar-update.sh" \
   "$ROOT/scripts/rollback-menubar-update.sh" \
   "$ROOT/scripts/install-http-autostart.sh" \
-  "$ROOT/scripts/uninstall-http-autostart.sh"; do
+  "$ROOT/scripts/uninstall-http-autostart.sh" \
+  "$ROOT/scripts/launch-manual-update.sh"; do
   bash -n "$script"
 done
 plutil -lint "$ROOT/launchd/io.github.dcierra.darwinrelay.http.plist.template" >/dev/null
@@ -35,6 +36,8 @@ grep -Fq 'title: "Diagnostics & Settings"' "$MENU_SWIFT"
 grep -Fq 'menu.autoenablesItems = false' "$MENU_SWIFT"
 grep -Fq 'connectionMenu.autoenablesItems = false' "$MENU_SWIFT"
 grep -Fq 'ChatGPT → Settings → Apps → Create' "$MENU_SWIFT"
+grep -Fq 'title: "Update DarwinRelay…"' "$MENU_SWIFT"
+grep -Fq 'scripts/launch-manual-update.sh' "$MENU_SWIFT"
 ! grep -Fq 'ChatGPT → Plugins → + → New Plugin' "$MENU_SWIFT"
 grep -Fq 'Privacy_Accessibility' "$MENU_SWIFT"
 grep -Fq 'Privacy_ScreenCapture' "$MENU_SWIFT"

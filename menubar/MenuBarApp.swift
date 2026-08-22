@@ -314,6 +314,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var httpProcess: Process?
     private var tunnelProcess: Process?
     private var tunnelReader: FileHandle?
+    private var updateLauncherProcess: Process?
 
     private var token = ""
     private var publicURL: String?
@@ -343,6 +344,7 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let clientIdMenuItem = NSMenuItem(title: "OAuth Client ID: —", action: nil, keyEquivalent: "")
     private let tunnelModeMenuItem = NSMenuItem(title: "Tunnel: —", action: nil, keyEquivalent: "")
     private let startStopItem = NSMenuItem(title: "Start", action: nil, keyEquivalent: "")
+    private let updateMenuItem = NSMenuItem(title: "Update DarwinRelay…", action: nil, keyEquivalent: "")
     private let strictApprovalsItem = NSMenuItem(title: "Strict approvals", action: nil, keyEquivalent: "")
     private let desktopPermissionsItem = NSMenuItem(title: "Native desktop: checking permissions…", action: nil, keyEquivalent: "")
     private let protectedFilesItem = NSMenuItem(title: "Protected files (FDA): checking…", action: nil, keyEquivalent: "")
@@ -590,6 +592,12 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setSymbol("doc.on.doc", on: setup, description: "Copy ChatGPT setup")
         menu.addItem(setup)
 
+        updateMenuItem.target = self
+        updateMenuItem.action = #selector(updateDarwinRelay)
+        updateMenuItem.toolTip = "Open the canonical manual release updater in an independent Terminal window."
+        setSymbol("arrow.down.circle", on: updateMenuItem, description: "Update DarwinRelay")
+        menu.addItem(updateMenuItem)
+
         menu.addItem(.separator())
 
         let connection = NSMenuItem(title: "Connection", action: nil, keyEquivalent: "")
@@ -751,6 +759,10 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
             setSymbol("play.fill", on: startStopItem, description: "Start DarwinRelay")
         }
 
+        let updateLauncher = Paths.packageDir + "/scripts/launch-manual-update.sh"
+        updateMenuItem.isEnabled = updateLauncherProcess == nil && FileManager.default.isExecutableFile(atPath: updateLauncher)
+        updateMenuItem.title = updateLauncherProcess == nil ? "Update DarwinRelay…" : "Opening updater…"
+
         let strict = OperatorSettingsStore.strictApprovals()
         strictApprovalsItem.state = strict ? .on : .off
         strictApprovalsItem.title = strict ? "Safety: Strict approvals" : "Safety: Standard"
@@ -780,6 +792,48 @@ final class Controller: NSObject, NSApplicationDelegate, NSMenuDelegate {
         default: startBridge()
         }
         render()
+    }
+
+    @objc private func updateDarwinRelay() {
+        let launcher = Paths.packageDir + "/scripts/launch-manual-update.sh"
+        guard FileManager.default.isExecutableFile(atPath: launcher) else {
+            notify("Updater unavailable", "Missing executable: \(launcher)")
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Update DarwinRelay?"
+        alert.informativeText = "DarwinRelay will check the canonical GitHub releases and update from v\(displayVersion) to the latest stable version if one is available. A Terminal window will open to show progress. The bridge restarts, so active MCP, shell, PTY, and job authority is interrupted. The updater validates the release and rolls back if activation fails."
+        alert.addButton(withTitle: "Update")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        guard updateLauncherProcess == nil else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: launcher)
+        process.arguments = ["--confirmed"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { [weak self] task in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.updateLauncherProcess = nil
+                if task.terminationStatus != 0 {
+                    self.notify("Could not open updater", "Launcher exited with status \(task.terminationStatus). Check \(Paths.logDir).")
+                }
+                self.render()
+            }
+        }
+        do {
+            updateLauncherProcess = process
+            try process.run()
+            notify("Opening updater", "A Terminal window will show progress. DarwinRelay will restart automatically.")
+            render()
+        } catch {
+            updateLauncherProcess = nil
+            notify("Could not open updater", error.localizedDescription)
+            render()
+        }
     }
 
     @objc private func toggleStrictApprovals() {

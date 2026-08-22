@@ -1,0 +1,187 @@
+#!/bin/bash
+set -euo pipefail
+
+# Maintainer-only pre-release validation. This runs the candidate commit's real
+# update transaction against the installed release checkout without requiring a
+# public tag. Normal users should use scripts/update.sh, which remains release-only.
+CANDIDATE_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+APP="${DARWINRELAY_APP_PATH:-/Applications/DarwinRelay.app}"
+ACK="I_UNDERSTAND_THIS_INSTALLS_UNPUBLISHED_DARWINRELAY_CODE"
+MODE="roundtrip"
+ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --rollback-check) MODE="rollback" ;;
+    --keep-installed) MODE="apply" ;;
+    --preflight-only) MODE="preflight" ;;
+    --yes) ARGS+=("--yes") ;;
+    -h|--help)
+      cat <<'USAGE'
+Usage: ./scripts/test-update-candidate.sh [--preflight-only|--rollback-check|--keep-installed] [--yes]
+
+Maintainer-only: validate this clean worktree's exact commit against the installed
+DarwinRelay release checkout before publishing a tag. By default the candidate
+reaches full LaunchAgent/doctor validation and is then deliberately rolled back
+to the original release. --preflight-only performs only non-mutating environment
+checks. --rollback-check injects an earlier failure immediately after the app swap.
+--keep-installed leaves a fully validated candidate installed.
+USAGE
+      exit 0
+      ;;
+    *) echo "Unknown argument: $arg" >&2; exit 64 ;;
+  esac
+done
+if [[ "$MODE" != "preflight" ]]; then
+  [[ " ${ARGS[*]} " == *" --yes "* ]] || { echo "Candidate testing requires --yes after explicit operator approval." >&2; exit 64; }
+fi
+
+[[ -x "$APP/Contents/MacOS/DarwinRelay" ]] || { echo "Installed DarwinRelay.app not found: $APP" >&2; exit 69; }
+PROD_ROOT="$(/usr/libexec/PlistBuddy -c 'Print :DarwinRelayPackageDirectory' "$APP/Contents/Info.plist" 2>/dev/null || true)"
+[[ -n "$PROD_ROOT" && -d "$PROD_ROOT" ]] || { echo "Installed app does not identify a valid production checkout." >&2; exit 69; }
+CANDIDATE_ROOT="$(cd "$CANDIDATE_ROOT" && pwd -P)"
+PROD_ROOT="$(cd "$PROD_ROOT" && pwd -P)"
+[[ "$CANDIDATE_ROOT" != "$PROD_ROOT" ]] || { echo "Candidate testing requires a separate development worktree." >&2; exit 78; }
+[[ -z "$(git -C "$CANDIDATE_ROOT" status --porcelain)" ]] || { echo "Candidate worktree must be clean and committed." >&2; exit 78; }
+[[ -z "$(git -C "$PROD_ROOT" status --porcelain)" ]] || { echo "Production checkout must be clean." >&2; exit 78; }
+
+common_dir() {
+  local repo="$1" d
+  d="$(git -C "$repo" rev-parse --git-common-dir)"
+  if [[ "$d" != /* ]]; then d="$repo/$d"; fi
+  (cd "$d" && pwd -P)
+}
+[[ "$(common_dir "$CANDIDATE_ROOT")" == "$(common_dir "$PROD_ROOT")" ]] || {
+  echo "Candidate and installed checkout must share the same canonical Git object store." >&2
+  exit 78
+}
+
+# A real self-update test is invalid if another launchd owner can respawn the
+# menu app. This catches stale launchctl-submit jobs and manual/alternate app
+# owners before we revoke the live bridge. Only the canonical product labels are
+# allowed, and the live menu PID must be the HTTP LaunchAgent PID.
+DOMAIN="gui/$(id -u)"
+CANONICAL_LABEL="io.github.dcierra.darwinrelay.http"
+LAUNCHD_LABELS="$(launchctl print "$DOMAIN" 2>/dev/null \
+  | grep -Eio '[A-Za-z0-9._-]*darwinrelay[A-Za-z0-9._-]*' \
+  | sort -u || true)"
+UNEXPECTED_LABELS=""
+while IFS= read -r label; do
+  [[ -n "$label" ]] || continue
+  case "$label" in
+    io.github.dcierra.darwinrelay.http|io.github.dcierra.darwinrelay.tunnel) ;;
+    *) UNEXPECTED_LABELS+="${label}\n" ;;
+  esac
+done <<<"$LAUNCHD_LABELS"
+if [[ -n "$UNEXPECTED_LABELS" ]]; then
+  echo "Refusing candidate test while competing DarwinRelay launchd labels exist:" >&2
+  printf '%b' "$UNEXPECTED_LABELS" >&2
+  exit 78
+fi
+CANONICAL_OUT="$(launchctl print "$DOMAIN/$CANONICAL_LABEL" 2>/dev/null)" || {
+  echo "Canonical DarwinRelay HTTP LaunchAgent is not loaded." >&2
+  exit 78
+}
+CANONICAL_STATE="$(printf '%s\n' "$CANONICAL_OUT" | awk '$1=="state" && $2=="=" {print $3; exit}')"
+CANONICAL_PID="$(printf '%s\n' "$CANONICAL_OUT" | awk '$1=="pid" && $2=="=" {print $3; exit}')"
+[[ "$CANONICAL_STATE" == "running" && "$CANONICAL_PID" =~ ^[0-9]+$ && "$CANONICAL_PID" -ge 2 ]] || {
+  echo "Canonical DarwinRelay HTTP LaunchAgent is not running with a valid PID." >&2
+  exit 78
+}
+MENU_PIDS="$(ps -axo pid=,command= | awk '$2 ~ /\/DarwinRelay\.app\/Contents\/MacOS\/DarwinRelay$/ {print $1}')"
+[[ "$(printf '%s\n' "$MENU_PIDS" | awk 'NF{n++} END{print n+0}')" == 1 && "$MENU_PIDS" == "$CANONICAL_PID" ]] || {
+  echo "Refusing candidate test: live DarwinRelay menu ownership does not match the canonical LaunchAgent." >&2
+  printf 'canonical pid=%s; menu pid(s)=%s\n' "$CANONICAL_PID" "${MENU_PIDS:-<none>}" >&2
+  exit 78
+}
+if [[ "$MODE" == "preflight" ]]; then
+  printf 'Candidate environment preflight passed: canonical LaunchAgent pid %s is the only DarwinRelay owner.\n' "$CANONICAL_PID"
+  exit 0
+fi
+
+CANDIDATE_SHA="$(git -C "$CANDIDATE_ROOT" rev-parse HEAD)"
+OLD_SHA="$(git -C "$PROD_ROOT" rev-parse HEAD)"
+OLD_TAG="$(git -C "$PROD_ROOT" describe --tags --exact-match 2>/dev/null || true)"
+OLD_VERSION="${OLD_TAG#v}"
+CANDIDATE_VERSION="$(node -p 'require(process.argv[1]).version' "$CANDIDATE_ROOT/package.json")"
+[[ "$OLD_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Production checkout is not an exact stable release." >&2; exit 78; }
+[[ "$CANDIDATE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Candidate package version is not stable semver: $CANDIDATE_VERSION" >&2; exit 78; }
+[[ "$CANDIDATE_SHA" != "$OLD_SHA" ]] || { echo "Candidate commit equals installed release commit." >&2; exit 78; }
+
+npm --prefix "$CANDIDATE_ROOT" run check:integrity >/dev/null
+
+# Snapshot native desktop readiness through the current live MCP runtime. This
+# uses the candidate probe client but executes ui_status inside the installed
+# DarwinRelay chain, avoiding Terminal/iTerm TCC attribution.
+HTTP_PORT="${DARWINRELAY_HTTP_PORT:-8787}"
+HTTP_TOKEN_FILE="${DARWINRELAY_HTTP_TOKEN_FILE:-$HOME/Library/Application Support/DarwinRelay/http-token}"
+PRE_UI_JSON="$(node "$CANDIDATE_ROOT/scripts/probe-bridge-status.mjs" --http-port "$HTTP_PORT" --token-file "$HTTP_TOKEN_FILE" --tool ui_status)" || {
+  echo "Candidate preflight could not query ui_status through the live MCP runtime." >&2
+  exit 78
+}
+PRE_DESKTOP_READY=0
+if node -e 'const s=JSON.parse(process.argv[1]); process.exit(s.accessibilityTrusted===true && s.screenRecordingGranted===true && s.postEventsGranted===true ? 0 : 1)' "$PRE_UI_JSON"; then
+  PRE_DESKTOP_READY=1
+fi
+
+HELPER="$(mktemp "${TMPDIR:-/tmp}/darwinrelay-candidate-update.XXXXXX")"
+MARKER_FILE="$(mktemp "${TMPDIR:-/tmp}/darwinrelay-candidate-marker.XXXXXX")"
+: > "$MARKER_FILE"
+cp "$CANDIDATE_ROOT/scripts/update.sh" "$HELPER"
+chmod 700 "$HELPER"
+cleanup_candidate_test() {
+  rm -f "$HELPER" "$MARKER_FILE" 2>/dev/null || true
+}
+trap cleanup_candidate_test EXIT
+
+export DARWINRELAY_UPDATE_HELPER=1
+export DARWINRELAY_UPDATE_ROOT="$PROD_ROOT"
+export DARWINRELAY_MAINTAINER_CANDIDATE_TEST="$ACK"
+export DARWINRELAY_UPDATE_CANDIDATE_SHA="$CANDIDATE_SHA"
+export DARWINRELAY_UPDATE_CANDIDATE_MARKER_FILE="$MARKER_FILE"
+export DARWINRELAY_UPDATE_EXPECT_DESKTOP_READY="$PRE_DESKTOP_READY"
+case "$MODE" in
+  rollback) export DARWINRELAY_UPDATE_CANDIDATE_FAILPOINT=after_app_install ;;
+  roundtrip) export DARWINRELAY_UPDATE_CANDIDATE_FAILPOINT=after_validation ;;
+esac
+
+set +e
+"$HELPER" "${ARGS[@]}"
+rc=$?
+set -e
+
+app_version() {
+  /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2>/dev/null || true
+}
+launchagent_running() {
+  launchctl print "gui/$(id -u)/io.github.dcierra.darwinrelay.http" 2>/dev/null \
+    | awk '$1 == "state" && $2 == "=" && $3 == "running" {ok=1} $1 == "pid" && $2 == "=" && $3 ~ /^[0-9]+$/ {pid=$3} END {exit !(ok && pid >= 2)}'
+}
+
+if [[ "$MODE" == "rollback" || "$MODE" == "roundtrip" ]]; then
+  [[ "$rc" -ne 0 ]] || { echo "Candidate test expected the injected validation failure." >&2; exit 1; }
+  EXPECTED_POINT="after_validation"
+  [[ "$MODE" == "rollback" ]] && EXPECTED_POINT="after_app_install"
+  EXPECTED_MARKER="$EXPECTED_POINT $CANDIDATE_SHA"
+  ACTUAL_MARKER="$(cat "$MARKER_FILE" 2>/dev/null || true)"
+  [[ "$ACTUAL_MARKER" == "$EXPECTED_MARKER" ]] || {
+    echo "Candidate updater failed before the expected $EXPECTED_POINT failpoint (marker=${ACTUAL_MARKER:-<missing>})." >&2
+    exit 1
+  }
+  [[ "$(git -C "$PROD_ROOT" rev-parse HEAD)" == "$OLD_SHA" ]] || { echo "Rollback did not restore old checkout." >&2; exit 1; }
+  [[ "$(app_version)" == "$OLD_VERSION" ]] || { echo "Rollback did not restore app v$OLD_VERSION." >&2; exit 1; }
+  launchagent_running || { echo "Rollback did not restore LaunchAgent ownership." >&2; exit 1; }
+  DOCTOR_OUT="$("$PROD_ROOT/scripts/doctor.sh" --transport http)"
+  [[ "$DOCTOR_OUT" == *"CORE VERDICT: READY"* ]] || { echo "$DOCTOR_OUT" >&2; exit 1; }
+  if [[ "$MODE" == "roundtrip" ]]; then
+    printf 'Candidate full round-trip passed: %s reached full validation, then %s was restored.\n' "$CANDIDATE_VERSION" "$OLD_TAG"
+  else
+    printf 'Candidate rollback check passed: %s restored after injected app-install failure.\n' "$OLD_TAG"
+  fi
+  exit 0
+fi
+
+[[ "$rc" -eq 0 ]] || exit "$rc"
+[[ "$(git -C "$PROD_ROOT" rev-parse HEAD)" == "$CANDIDATE_SHA" ]] || { echo "Candidate update did not land on the exact tested commit." >&2; exit 1; }
+[[ "$(app_version)" == "$CANDIDATE_VERSION" ]] || { echo "Candidate app version mismatch after update." >&2; exit 1; }
+launchagent_running || { echo "Candidate update is not LaunchAgent-owned." >&2; exit 1; }
+printf 'Candidate apply check passed: %s (%s).\n' "$CANDIDATE_VERSION" "$CANDIDATE_SHA"
