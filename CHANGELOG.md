@@ -4,6 +4,8 @@ All notable public DarwinRelay changes will be documented here.
 
 ## Unreleased
 
+## 0.6.4 — 2026-08-22
+
 - Fixed HTTP autostart from source checkouts under protected locations such as `~/Documents`: the LaunchAgent no longer asks launchd itself to `chdir` into the source tree before the signed DarwinRelay app starts; `DARWINRELAY_HOME` remains the explicit package locator used by the app.
 - Fixed `scripts/deploy-menubar-update.sh` process discovery so busy process tables cannot turn a successful PID lookup into SIGPIPE/exit 141 under `pipefail`; lifecycle coverage now exercises that failure mode deterministically.
 ## 0.6.3 — 2026-08-22
